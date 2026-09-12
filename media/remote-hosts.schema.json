@@ -1,0 +1,105 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Remote Host Explorer project servers",
+  "description": "Servers shown in the Remote Hosts view while this folder is open. Passwords and key passphrases are never stored here.",
+  "type": "object",
+  "properties": {
+    "servers": {
+      "type": "array",
+      "description": "Server profiles for this project.",
+      "items": {
+        "type": "object",
+        "required": [
+          "id",
+          "name",
+          "protocol",
+          "host",
+          "remoteRoot"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "Stable unique identifier used to key stored secrets."
+          },
+          "name": {
+            "type": "string",
+            "description": "Display name shown in the Remote Hosts view."
+          },
+          "protocol": {
+            "type": "string",
+            "enum": [
+              "sftp",
+              "ftps",
+              "ftp"
+            ],
+            "enumDescriptions": [
+              "SFTP over SSH (default port 22). Supports password or private key authentication.",
+              "FTP with explicit TLS (AUTH TLS, default port 21). Password authentication; the server certificate is verified.",
+              "Plain FTP (default port 21). Password and file contents are sent unencrypted."
+            ],
+            "default": "sftp",
+            "description": "Remote transport."
+          },
+          "host": {
+            "type": "string"
+          },
+          "port": {
+            "type": "number",
+            "minimum": 1,
+            "maximum": 65535,
+            "default": 22
+          },
+          "username": {
+            "type": "string"
+          },
+          "privateKeyPath": {
+            "type": "string",
+            "description": "Path to an SSH private key. Setting this selects key authentication."
+          },
+          "remoteRoot": {
+            "type": "string",
+            "description": "Root path on the remote server to browse."
+          },
+          "localPath": {
+            "type": "string",
+            "description": "Local folder mapped to remoteRoot for upload/download resolution."
+          },
+          "autoUpload": {
+            "type": "boolean",
+            "default": false,
+            "description": "Automatically upload files under localPath on save."
+          },
+          "ignoreGlobs": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "default": [
+              "**/.git/**",
+              "**/node_modules/**",
+              "**/.vscode/**",
+              "**/.env",
+              "**/.env.*",
+              "**/.ssh/**",
+              "**/*.pem",
+              "**/*.key"
+            ],
+            "description": "Paths relative to localPath that are skipped by auto-upload and recursive uploads/downloads. Supports *, ?, and **. When omitted, the defaults apply; set [] to ignore nothing."
+          },
+          "useRsyncForUpload": {
+            "type": "boolean",
+            "default": false,
+            "description": "Upload files via the rsync binary over ssh instead of SFTP put (requires local rsync/ssh binaries)."
+          },
+          "rsyncOptions": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Extra flags passed to the rsync binary when useRsyncForUpload is enabled."
+          }
+        }
+      }
+    }
+  }
+}
