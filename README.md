@@ -3,16 +3,21 @@
 Browse, edit, upload, and download files on your servers without leaving VS Code — a deployment
 workflow in the spirit of PhpStorm's Remote Host tool. Works over **SFTP**, **FTPS**, and **FTP**.
 
+![The Add Server form](media/example.png)
+
 ## Features
 
 - **Remote Hosts view** in the Activity Bar: browse server folders, open a file, edit it, and save to
   upload it back.
 - **Safe saving**: if a file changed or was deleted on the server since you opened it, you're asked
   before anything is overwritten.
-- **File operations**: create, rename, delete, copy, paste, back up, and move — for one item or
-  many at once.
+- **File operations**: create files and folders, rename, delete, copy, paste, back up, and move — for
+  one item or many at once.
 - **Upload and download** files and whole folders between your project and the server, including
-  **upload on save**.
+  **upload on save** and dragging files in from your file manager. Folder transfers over SFTP send
+  several files at once.
+- **Compare** a local file with the server's copy side by side.
+- **SSH terminal**: open a shell on an SFTP server, already in the folder you picked.
 - **Project or global servers**: each project shows only its own servers, unless you make a server
   available everywhere.
 - **Secure by default**: credentials in your system's secure storage, SSH host key checks, and
@@ -26,7 +31,7 @@ workflow in the spirit of PhpStorm's Remote Host tool. Works over **SFTP**, **FT
 3. Fill in the form:
    - **Available in** — *This project only* (default) or *All projects*.
    - **Protocol** — SFTP, FTPS, or FTP; then the host, port, and username.
-   - **Authentication** — a password, or for SFTP a private key file.
+   - **Authentication** — a password, or for SFTP a private key file or your SSH agent.
    - **Remote root path** — the server folder to show. **Browse...** lets you pick it.
    - **Local mapped folder** — optional, but needed for uploading and downloading. Usually your
      project folder.
@@ -42,7 +47,15 @@ it matches what your hosting provider or administrator gives you.
 - **Right-click** a file, folder, or server for all actions.
 - **Select several items** with `Cmd`-click / `Ctrl`-click or `Shift`-click to delete, copy, back up, or
   download them together.
+- **Create** files and folders with **New File...** and **New Folder...** on a folder or the server.
 - **Move items** by dragging them onto a folder, or with **Cut** then **Paste**.
+- **Upload by dragging** files or folders from Finder, File Explorer, or VS Code's Explorer onto a folder
+  in the view. If an item with the same name already exists, you choose **Replace** or **Skip**.
+- **Open SSH Terminal** on an SFTP server or folder opens a shell in VS Code's terminal, in that folder.
+  It uses the extension's connection, so you don't log in again and nothing needs to be installed.
+- **Lost connections** are picked up again: if a connected server drops (for example after sleep or a
+  network change), its dot turns yellow and the next action — expanding a folder, opening a file,
+  uploading — reconnects.
 - **Keyboard shortcuts** (while the view is focused):
 
   | Action | Windows / Linux | macOS |
@@ -65,8 +78,12 @@ computer to the server's remote root, so `my-project/app/index.php` maps to `/va
 - **Download**: right-click items in the Remote Hosts view, or files in the Explorer, and choose
   **Download to Local**. For servers without a local folder, this action is greyed out.
 - **Existing local files are never replaced silently.** If a download would overwrite a file on your
-  computer, you choose **Overwrite**, **Skip**, or apply either to all remaining files.
-- **Large transfers** show progress and can be cancelled.
+  computer, you choose **Overwrite**, **Skip**, or apply either to all remaining files. For a folder,
+  all of these questions come first, before any file is transferred.
+- **Compare**: right-click a file in the Explorer and choose **Compare with Remote**, or a file in the
+  Remote Hosts view and choose **Compare with Local**. The server's copy opens read-only on the left.
+- **Large transfers** show progress and can be cancelled. Over SFTP, up to four files in a folder are
+  transferred at the same time; FTP sends one file at a time.
 
 ### Ignore patterns
 
@@ -128,7 +145,9 @@ saved passwords.
   connect and is never copied or uploaded.
 - **SSH host keys** are remembered the first time you connect. If a server's key later changes, you
   get a prominent warning, because that can mean the connection is being intercepted.
-- **FTPS** checks the server's TLS certificate and refuses invalid or self-signed ones.
+- **FTPS** checks the server's TLS certificate and refuses invalid or self-signed ones. Port 990 uses
+  implicit TLS; any other port uses explicit TLS (AUTH TLS).
+- **SSH agent** authentication uses the keys your agent holds; the extension never sees or stores them.
 - **FTP** sends your password and files **unencrypted**. The form warns you when you select it. Use
   SFTP or FTPS whenever the server supports them.
 - **Saved credentials stay with their server.** If you change the protocol, host, port, or username in
@@ -166,6 +185,7 @@ you type. Each server needs a unique `id`, which its saved password is linked to
 | `host`, `port` | Server address. The port defaults to `22` for SFTP and `21` for FTP and FTPS. |
 | `username` | Login name. |
 | `privateKeyPath` | SFTP only. Path to a private key file; when set, key authentication is used. |
+| `useSshAgent` | SFTP only. Authenticate with the keys loaded in your SSH agent. |
 | `remoteRoot` | Server folder shown as the root. |
 | `localPath` | Local folder linked to `remoteRoot`. Needed for uploads and downloads. |
 | `autoUpload` | Upload files in `localPath` when you save them. |
@@ -207,6 +227,11 @@ choose **Trust the New Key**. If you don't know why it changed, don't connect �
 The server's certificate isn't trusted, so the connection is refused on purpose. Use SFTP if the
 server supports it, or ask your hosting provider for a valid certificate.
 
+**"No SSH agent was found: SSH_AUTH_SOCK is not set …"**
+The server uses SSH agent authentication, but VS Code wasn't started with access to an agent. Start
+`ssh-agent`, add your key with `ssh-add`, and restart VS Code. On Windows, start the **OpenSSH
+Authentication Agent** service. Or switch the server to private key authentication.
+
 **"Could not read the private key at …"**
 Check that the path in **Private key path** exists and that your user can read the file.
 
@@ -234,13 +259,12 @@ that `ssh` can log in to the server with your key without asking for a password.
 ## Known limitations
 
 - A few operations aren't available yet:
-  - Comparing local and remote files.
   - Syncing a whole folder.
   - Changing file permissions.
   - Copying or moving between two different servers.
-- SSH agents (ssh-agent, Pageant) and `~/.ssh/config` host aliases aren't used yet; enter the host
-  and key file directly.
-- FTPS supports explicit TLS only (usually port 21), not implicit TLS on port 990.
+- `~/.ssh/config` host aliases aren't used; enter the host and key file directly. Pageant isn't
+  supported; on Windows use the OpenSSH Authentication Agent.
+- Implicit FTPS is only used on port 990.
 - Some FTP servers don't report when a file was modified. With those, the extension can't warn you
   that a file changed on the server before you save over it.
 - On FTP, browsing waits while a transfer is running.

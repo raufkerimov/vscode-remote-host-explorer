@@ -1,3 +1,4 @@
+import * as path from 'path';
 import * as vscode from 'vscode';
 import {
 	getScopedServerProfiles,
@@ -7,11 +8,23 @@ import {
 } from '../config/serverConfig';
 import type { RemoteFileCache } from '../editing/RemoteFileCache';
 import type { ConnectionManager } from '../remote/ConnectionManager';
-import { moveRemoteItems } from '../remote/moveItems';
+import { moveRemoteItems, promptForConflict } from '../remote/moveItems';
 import type { RemoteFileEntry } from '../remote/RemoteClient';
-import { basenameRemote, dirnameRemote, isSameOrInside, normalizeRemote } from '../util/remotePath';
+import { CancelledError, uploadPath, withTransferProgress } from '../remote/transfer';
+import { basenameRemote, dirnameRemote, isSameOrInside, joinRemote, normalizeRemote } from '../util/remotePath';
 
 export const REMOTE_TREE_MIME = 'application/vnd.code.tree.remotehostexplorer';
+/** What VS Code puts on a drag from the operating system's file manager or from the Explorer. */
+const URI_LIST_MIME = 'text/uri-list';
+
+/** Parses a `text/uri-list` payload (RFC 2483): one URI per line, `#` lines are comments. */
+export function parseUriList(text: string): vscode.Uri[] {
+	return text
+		.split(/\r?\n/)
+		.map(line => line.trim())
+		.filter(line => line && !line.startsWith('#'))
+		.map(line => vscode.Uri.parse(line));
+}
 
 export type TreeNode = ServerNode | FileNode;
 
@@ -21,12 +34,21 @@ export class ServerNode {
 }
 
 /**
- * Context value for a file/directory row. The `.mapped` / `.unmapped` suffix records whether the server
- * has a `localPath`, so menu entries that need one (Download) can be disabled in `package.json`.
+ * Context value for a file/directory row: `remoteHostExplorer.<file|directory>.<protocol>.<mapped|unmapped>`.
+ * The last segment records whether the server has a `localPath`, so menu entries that need one
+ * (Download, Compare) can be disabled in `package.json`; the protocol gates SSH-only actions.
  */
 export function fileContextValue(entry: RemoteFileEntry, server: ServerProfile): string {
 	const kind = entry.isDirectory ? 'directory' : 'file';
-	return `remoteHostExplorer.${kind}.${server.localPath ? 'mapped' : 'unmapped'}`;
+	return `remoteHostExplorer.${kind}.${server.protocol}.${server.localPath ? 'mapped' : 'unmapped'}`;
+}
+
+/**
+ * Context value for a server row: `remoteHostExplorer.server.<connected|disconnected>.<protocol>`. The
+ * protocol lets SSH-only actions (Open SSH Terminal) be hidden for FTP servers.
+ */
+export function serverContextValue(server: ServerProfile, connected: boolean): string {
+	return `remoteHostExplorer.server.${connected ? 'connected' : 'disconnected'}.${server.protocol}`;
 }
 
 export class FileNode {
@@ -44,7 +66,7 @@ function fileKey(serverId: string, remotePath: string): string {
 
 export class RemoteTreeProvider implements vscode.TreeDataProvider<TreeNode>, vscode.TreeDragAndDropController<TreeNode> {
 	readonly dragMimeTypes = [REMOTE_TREE_MIME];
-	readonly dropMimeTypes = [REMOTE_TREE_MIME];
+	readonly dropMimeTypes = [REMOTE_TREE_MIME, URI_LIST_MIME];
 
 	private readonly onDidChangeTreeDataEmitter = new vscode.EventEmitter<TreeNode | undefined>();
 	readonly onDidChangeTreeData = this.onDidChangeTreeDataEmitter.event;
@@ -54,7 +76,8 @@ export class RemoteTreeProvider implements vscode.TreeDataProvider<TreeNode>, vs
 
 	constructor(
 		private readonly connections: ConnectionManager,
-		private readonly fileCache: RemoteFileCache
+		private readonly fileCache: RemoteFileCache,
+		private readonly outputChannel: vscode.OutputChannel
 	) {}
 
 	/** Reuses node instances so VS Code can match refresh and reveal targets by identity. */
@@ -131,17 +154,19 @@ export class RemoteTreeProvider implements vscode.TreeDataProvider<TreeNode>, vs
 	getTreeItem(node: TreeNode): vscode.TreeItem {
 		if (node.kind === 'server') {
 			const connected = this.connections.isConnected(node.server.id);
+			// A dropped connection keeps the server open; expanding or refreshing it reconnects.
+			const inSession = connected || this.connections.hasSession(node.server.id);
 			const item = new vscode.TreeItem(
 				node.server.name,
-				connected ? vscode.TreeItemCollapsibleState.Collapsed : vscode.TreeItemCollapsibleState.None
+				inSession ? vscode.TreeItemCollapsibleState.Collapsed : vscode.TreeItemCollapsibleState.None
 			);
-			item.contextValue = connected ? 'remoteHostExplorer.server.connected' : 'remoteHostExplorer.server.disconnected';
+			item.contextValue = serverContextValue(node.server, inSession);
 			item.id = `server:${node.server.id}`;
 			item.iconPath = new vscode.ThemeIcon(
-				connected ? 'circle-filled' : 'circle-outline',
-				new vscode.ThemeColor(connected ? 'charts.green' : 'disabledForeground')
+				inSession ? 'circle-filled' : 'circle-outline',
+				new vscode.ThemeColor(connected ? 'charts.green' : inSession ? 'charts.yellow' : 'disabledForeground')
 			);
-			const state = connected ? 'connected' : 'not connected';
+			const state = connected ? 'connected' : inSession ? 'connection lost, reconnects when used' : 'not connected';
 			// Global servers are the ones that appear in every window, so they are labelled as such.
 			const scopeLabel = node.scope === 'global' ? ' · global' : '';
 			item.description = `${node.server.protocol}://${node.server.host} - ${state}${scopeLabel}`;
@@ -180,12 +205,12 @@ export class RemoteTreeProvider implements vscode.TreeDataProvider<TreeNode>, vs
 		}
 
 		const server = node.server;
-		const client = this.connections.getExistingClient(server.id);
-		if (!client) {
-			return [];
-		}
 		const remotePath = node.kind === 'server' ? server.remoteRoot : node.entry.path;
 		try {
+			const client = await this.connections.getSessionClient(server);
+			if (!client) {
+				return [];
+			}
 			const entries = await client.list(remotePath);
 			entries.sort((a, b) => (a.isDirectory === b.isDirectory ? a.name.localeCompare(b.name) : a.isDirectory ? -1 : 1));
 			return entries.map(entry => this.fileNode(server, entry));
@@ -229,8 +254,15 @@ export class RemoteTreeProvider implements vscode.TreeDataProvider<TreeNode>, vs
 	}
 
 	async handleDrop(target: TreeNode | undefined, dataTransfer: vscode.DataTransfer): Promise<void> {
+		if (!target) {
+			return;
+		}
 		const item = dataTransfer.get(REMOTE_TREE_MIME);
-		if (!item || !target) {
+		if (!item) {
+			const uriList = dataTransfer.get(URI_LIST_MIME);
+			if (uriList) {
+				await this.uploadDropped(target, parseUriList(await uriList.asString()));
+			}
 			return;
 		}
 		const sources: FileNode[] = item.value;
@@ -239,17 +271,7 @@ export class RemoteTreeProvider implements vscode.TreeDataProvider<TreeNode>, vs
 		}
 
 		const targetServer = target.server;
-		const targetClient = this.connections.getExistingClient(targetServer.id);
-		if (!targetClient) {
-			vscode.window.showWarningMessage(`Server "${targetServer.name}" is not connected.`);
-			return;
-		}
-
-		const targetDir = target.kind === 'server'
-			? normalizeRemote(targetServer.remoteRoot)
-			: target.entry.isDirectory
-				? normalizeRemote(target.entry.path)
-				: dirnameRemote(target.entry.path);
+		const targetDir = dropDirectoryOf(target);
 
 		const sameServer = sources.filter(src => src.server.id === targetServer.id);
 		if (sameServer.length < sources.length) {
@@ -257,6 +279,11 @@ export class RemoteTreeProvider implements vscode.TreeDataProvider<TreeNode>, vs
 		}
 
 		try {
+			const targetClient = await this.connections.getSessionClient(targetServer);
+			if (!targetClient) {
+				vscode.window.showWarningMessage(`Server "${targetServer.name}" is not connected.`);
+				return;
+			}
 			const result = await moveRemoteItems(
 				targetClient,
 				// A folder and something inside it may both be selected; moving the folder already moves the child.
@@ -276,6 +303,67 @@ export class RemoteTreeProvider implements vscode.TreeDataProvider<TreeNode>, vs
 			this.refreshServer(targetServer.id);
 		}
 	}
+
+	/**
+	 * Uploads files and folders dropped from the operating system's file manager (or the Explorer) into the
+	 * folder they were dropped on. Existing items on the server are only replaced after confirmation.
+	 */
+	private async uploadDropped(target: TreeNode, uris: readonly vscode.Uri[]): Promise<void> {
+		const local = uris.filter(uri => uri.scheme === 'file');
+		if (local.length < uris.length) {
+			vscode.window.showWarningMessage('Only files and folders on this computer can be uploaded by dropping them.');
+		}
+		if (local.length === 0) {
+			return;
+		}
+
+		const server = target.server;
+		const targetDir = dropDirectoryOf(target);
+		try {
+			// Dropping is an explicit request, so it may open a connection the tree doesn't have yet.
+			const client = await this.connections.getClient(server);
+			const summary = await withTransferProgress(`Uploading ${local.length} item(s) to ${server.name}`, async run => {
+				for (const uri of local) {
+					const name = path.basename(uri.fsPath);
+					const remotePath = joinRemote(targetDir, name);
+					const existing = await client.stat(remotePath);
+					if (existing) {
+						const decision = await promptForConflict(
+							name,
+							targetDir,
+							existing.isDirectory
+								? 'Files with the same names inside it will be replaced; other files on the server are kept.'
+								: 'Uploading replaces the file on the server.'
+						);
+						if (decision === 'cancel') {
+							throw new CancelledError();
+						}
+						if (decision === 'skip') {
+							run.summary.skipped += 1;
+							continue;
+						}
+					}
+					await uploadPath(server, this.connections, this.outputChannel, uri.fsPath, remotePath, run);
+				}
+			});
+			if (summary) {
+				const ignored = summary.skipped ? ` (${summary.skipped} skipped)` : '';
+				vscode.window.showInformationMessage(`Uploaded ${summary.transferred} item(s) to ${targetDir}${ignored}.`);
+			}
+		} catch (err) {
+			vscode.window.showErrorMessage(`Upload failed: ${(err as Error).message}`);
+		} finally {
+			this.refreshDirectory(server, targetDir);
+		}
+	}
+}
+
+/** Folder that items dropped on `target` land in: the server root, the folder itself, or a file's folder. */
+function dropDirectoryOf(target: TreeNode): string {
+	if (target.kind === 'server') {
+		return normalizeRemote(target.server.remoteRoot);
+	}
+	return target.entry.isDirectory ? normalizeRemote(target.entry.path) : dirnameRemote(target.entry.path);
 }
 
 /** Drops any selected node whose ancestor directory is also selected, so it isn't processed twice. */

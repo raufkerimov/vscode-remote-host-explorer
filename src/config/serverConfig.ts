@@ -15,6 +15,8 @@ export interface ServerProfile {
 	port?: number;
 	username?: string;
 	privateKeyPath?: string;
+	/** SFTP only: authenticate with the keys loaded in the running ssh-agent (the OpenSSH agent on Windows). */
+	useSshAgent?: boolean;
 	remoteRoot: string;
 	localPath?: string;
 	autoUpload?: boolean;

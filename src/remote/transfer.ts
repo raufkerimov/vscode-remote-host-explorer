@@ -101,6 +101,71 @@ function throwIfCancelled(token: vscode.CancellationToken): void {
 }
 
 /**
+ * Files sent at once within one folder transfer. SFTP multiplexes requests over its single connection, so
+ * several files can move in parallel; an FTP control connection runs one command at a time.
+ */
+export const SFTP_PARALLEL_TRANSFERS = 4;
+
+function parallelTransfersFor(server: ServerProfile): number {
+	return server.protocol === 'sftp' ? SFTP_PARALLEL_TRANSFERS : 1;
+}
+
+/**
+ * Runs `worker` over `items` with at most `limit` running at once. After cancellation or the first failure
+ * no new item starts; the running ones settle, then the first error (or `CancelledError`) is thrown.
+ */
+export async function runWithLimit<T>(
+	items: readonly T[],
+	limit: number,
+	token: vscode.CancellationToken,
+	worker: (item: T) => Promise<void>
+): Promise<void> {
+	let next = 0;
+	const failures: unknown[] = [];
+	const lane = async (): Promise<void> => {
+		while (failures.length === 0 && next < items.length) {
+			if (token.isCancellationRequested) {
+				failures.push(new CancelledError());
+				return;
+			}
+			const item = items[next++];
+			try {
+				await worker(item);
+			} catch (err) {
+				failures.push(err);
+			}
+		}
+	};
+	const lanes = Math.max(1, Math.min(limit, items.length));
+	await Promise.all(Array.from({ length: lanes }, lane));
+	if (failures.length > 0) {
+		throw failures[0];
+	}
+}
+
+/** One file of a folder transfer, decided during planning so the transfer itself needs no prompts. */
+interface PlannedFile {
+	from: string;
+	to: string;
+	label: string;
+}
+
+async function transferPlannedFiles(
+	server: ServerProfile,
+	run: TransferRun,
+	files: readonly PlannedFile[],
+	transfer: (file: PlannedFile) => Promise<void>
+): Promise<void> {
+	const increment = files.length > 0 ? 100 / files.length : 0;
+	await runWithLimit(files, parallelTransfersFor(server), run.token, async file => {
+		run.progress.report({ message: file.label });
+		await transfer(file);
+		run.summary.transferred += 1;
+		run.progress.report({ increment });
+	});
+}
+
+/**
  * Runs a transfer inside a cancellable progress notification. Without this, a recursive transfer of a
  * large tree looks identical to a frozen extension and cannot be stopped.
  */
@@ -180,7 +245,9 @@ export async function uploadPath(
 
 	const client = await connections.getClient(server);
 	if (stats.isDirectory()) {
-		await uploadDirectory(server, client, localPath, localPath, remotePath, run);
+		const files: PlannedFile[] = [];
+		await planUploadDirectory(server, client, localPath, localPath, remotePath, run, files);
+		await transferPlannedFiles(server, run, files, file => client.put(file.from, file.to));
 	} else {
 		run.progress.report({ message: path.basename(localPath) });
 		await client.put(localPath, remotePath);
@@ -218,13 +285,15 @@ export async function collectUploadFiles(
 	return { files, ignored };
 }
 
-async function uploadDirectory(
+/** Creates the remote folders (parents first) and lists the files to send, applying ignore patterns. */
+async function planUploadDirectory(
 	server: ServerProfile,
 	client: RemoteClient,
 	rootLocalPath: string,
 	localDirPath: string,
 	remoteDirPath: string,
-	run: TransferRun
+	run: TransferRun,
+	files: PlannedFile[]
 ): Promise<void> {
 	throwIfCancelled(run.token);
 	await client.mkdir(remoteDirPath);
@@ -242,11 +311,9 @@ async function uploadDirectory(
 		}
 
 		if (item.isDirectory()) {
-			await uploadDirectory(server, client, rootLocalPath, childLocalPath, childRemotePath, run);
+			await planUploadDirectory(server, client, rootLocalPath, childLocalPath, childRemotePath, run, files);
 		} else {
-			run.progress.report({ message: progressLabel(rootLocalPath, childLocalPath) });
-			await client.put(childLocalPath, childRemotePath);
-			run.summary.transferred += 1;
+			files.push({ from: childLocalPath, to: childRemotePath, label: progressLabel(rootLocalPath, childLocalPath) });
 		}
 	}
 }
@@ -260,7 +327,9 @@ export async function downloadPath(
 	run: TransferRun
 ): Promise<void> {
 	if (isDirectory) {
-		await downloadDirectory(server, client, localPath, remotePath, localPath, run);
+		const files: PlannedFile[] = [];
+		await planDownloadDirectory(server, client, localPath, remotePath, localPath, run, files);
+		await transferPlannedFiles(server, run, files, file => client.get(file.from, file.to));
 		return;
 	}
 	if (!(await mayWriteLocalFile(run, localPath, path.basename(localPath)))) {
@@ -273,13 +342,18 @@ export async function downloadPath(
 	run.summary.transferred += 1;
 }
 
-async function downloadDirectory(
+/**
+ * Creates the local folders and lists the files to fetch. Every question about an existing local file is
+ * asked here, one at a time, before any file is transferred.
+ */
+async function planDownloadDirectory(
 	server: ServerProfile,
 	client: RemoteClient,
 	rootLocalPath: string,
 	remoteDirPath: string,
 	localDirPath: string,
-	run: TransferRun
+	run: TransferRun,
+	files: PlannedFile[]
 ): Promise<void> {
 	throwIfCancelled(run.token);
 	await fs.promises.mkdir(localDirPath, { recursive: true });
@@ -303,16 +377,14 @@ async function downloadDirectory(
 		}
 
 		if (entry.isDirectory) {
-			await downloadDirectory(server, client, rootLocalPath, entry.path, childLocalPath, run);
+			await planDownloadDirectory(server, client, rootLocalPath, entry.path, childLocalPath, run, files);
 		} else {
 			const label = progressLabel(rootLocalPath, childLocalPath);
 			if (!(await mayWriteLocalFile(run, childLocalPath, label))) {
 				run.summary.keptLocal += 1;
 				continue;
 			}
-			run.progress.report({ message: label });
-			await client.get(entry.path, childLocalPath);
-			run.summary.transferred += 1;
+			files.push({ from: entry.path, to: childLocalPath, label });
 		}
 	}
 }

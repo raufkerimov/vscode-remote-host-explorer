@@ -1,6 +1,10 @@
 import * as vscode from 'vscode';
 import { removeServerProfile, type ServerProfile } from '../config/serverConfig';
 import { DEFAULT_SFTP_PORT } from '../remote/clientFactory';
+import { SftpRemoteClient } from '../remote/SftpClient';
+import { remoteShellCommand, SshPseudoterminal } from '../remote/sshTerminal';
+import type { TreeNode } from '../tree/RemoteTreeProvider';
+import { dirnameRemote, normalizeRemote } from '../util/remotePath';
 import { ServerFormPanel } from '../webview/ServerFormPanel';
 import { guarded, pickServer, type CommandServices } from './shared';
 
@@ -106,6 +110,34 @@ export function registerServerCommands(services: CommandServices): vscode.Dispos
 				} catch {
 					// ignore
 				}
+			})
+		),
+
+		vscode.commands.registerCommand(
+			'remoteHostExplorer.openSshTerminal',
+			guarded('Could not open an SSH terminal', async (node?: TreeNode) => {
+				const server = node?.server ?? (await pickServer());
+				if (!server) {
+					return;
+				}
+				if (server.protocol !== 'sftp') {
+					vscode.window.showWarningMessage('SSH terminals are only available for SFTP servers.');
+					return;
+				}
+				const client = await connections.getClient(server);
+				if (!(client instanceof SftpRemoteClient)) {
+					return;
+				}
+				const remoteDir = node?.kind === 'file'
+					? node.entry.isDirectory ? normalizeRemote(node.entry.path) : dirnameRemote(node.entry.path)
+					: normalizeRemote(server.remoteRoot) || '/';
+				const command = remoteShellCommand(remoteDir);
+				const terminal = vscode.window.createTerminal({
+					name: `SSH: ${server.name}`,
+					pty: new SshPseudoterminal(size => client.openTerminal(command, size)),
+					iconPath: new vscode.ThemeIcon('terminal'),
+				});
+				terminal.show();
 			})
 		),
 

@@ -15,6 +15,7 @@ import { RemoteFileCache } from './editing/RemoteFileCache';
 import { registerServerCommands } from './commands/serverCommands';
 import { registerFileCommands } from './commands/fileCommands';
 import { autoUploadOnSave, registerTransferCommands } from './commands/transferCommands';
+import { registerCompareCommands } from './commands/compareCommands';
 import type { CommandServices } from './commands/shared';
 
 /** Context keys that drive `when` clauses for the Explorer and editor-title contributions. */
@@ -30,7 +31,7 @@ export async function activate(context: vscode.ExtensionContext) {
 	const connections = new ConnectionManager(secrets, hostKeys);
 	const fileCache = new RemoteFileCache(context, connections, outputChannel);
 	// The tree needs the cache so drag-and-drop moves keep open editors pointed at the new paths.
-	const treeProvider = new RemoteTreeProvider(connections, fileCache);
+	const treeProvider = new RemoteTreeProvider(connections, fileCache, outputChannel);
 
 	const treeView = vscode.window.createTreeView<TreeNode>('remoteHostExplorer.servers', {
 		treeDataProvider: treeProvider,
@@ -75,6 +76,7 @@ export async function activate(context: vscode.ExtensionContext) {
 		...registerServerCommands(services),
 		...registerFileCommands(services),
 		...registerTransferCommands(services),
+		...registerCompareCommands(services),
 
 		vscode.workspace.onDidSaveTextDocument(async document => {
 			// Each half is isolated: a failing re-upload of a cached remote file must not prevent

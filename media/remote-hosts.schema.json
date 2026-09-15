@@ -34,7 +34,7 @@
             ],
             "enumDescriptions": [
               "SFTP over SSH (default port 22). Supports password or private key authentication.",
-              "FTP with explicit TLS (AUTH TLS, default port 21). Password authentication; the server certificate is verified.",
+              "FTP over TLS (default port 21). Uses explicit TLS (AUTH TLS), or implicit TLS when the port is 990. Password authentication; the server certificate is verified.",
               "Plain FTP (default port 21). Password and file contents are sent unencrypted."
             ],
             "default": "sftp",
@@ -55,6 +55,11 @@
           "privateKeyPath": {
             "type": "string",
             "description": "Path to an SSH private key. Setting this selects key authentication."
+          },
+          "useSshAgent": {
+            "type": "boolean",
+            "default": false,
+            "description": "SFTP only. Authenticate with the keys loaded in your running SSH agent (ssh-agent, or the OpenSSH Authentication Agent on Windows)."
           },
           "remoteRoot": {
             "type": "string",

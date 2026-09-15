@@ -4,7 +4,7 @@ import * as vscode from 'vscode';
 import type { ProfileScope, RemoteProtocol, ServerProfile } from '../config/serverConfig';
 import { DEFAULT_IGNORE_GLOBS, getProfileScope, hasProjectScope, upsertServerProfile } from '../config/serverConfig';
 import type { SecretsManager } from '../config/secrets';
-import { buildRemoteClient, defaultPortFor } from '../remote/clientFactory';
+import { buildRemoteClient, defaultPortFor, requireSshAgentSocket } from '../remote/clientFactory';
 import type { HostKeyStore } from '../remote/hostKeys';
 import type { RemoteClient, RemoteConnectionOptions } from '../remote/RemoteClient';
 import { dirnameRemote, normalizeRemote } from '../util/remotePath';
@@ -27,7 +27,7 @@ interface SubmittedForm {
 	host: string;
 	port: string;
 	username: string;
-	authMethod: 'password' | 'key';
+	authMethod: 'password' | 'key' | 'agent';
 	password: string;
 	privateKeyPath: string;
 	passphrase: string;
@@ -184,10 +184,14 @@ async function handleSubmit(
 	}
 
 	const id = existing?.id ?? crypto.randomUUID();
-	// Key authentication only exists for SFTP; FTP always authenticates with a password.
+	// Key and agent authentication only exist for SFTP; FTP always authenticates with a password.
 	const usesKeyAuth = form.protocol === 'sftp' && form.authMethod === 'key';
+	const usesAgent = form.protocol === 'sftp' && form.authMethod === 'agent';
 
-	if (usesKeyAuth) {
+	if (usesAgent) {
+		// The agent holds the keys; a stored password or passphrase would be a credential nothing uses.
+		await secrets.deleteAll(id);
+	} else if (usesKeyAuth) {
 		if (form.passphrase) {
 			await secrets.setPassphrase(id, form.passphrase);
 		}
@@ -210,6 +214,7 @@ async function handleSubmit(
 		username: form.username.trim() || undefined,
 		// Clearing this when password auth is selected stops a stale key from being offered to the server.
 		privateKeyPath: usesKeyAuth ? form.privateKeyPath.trim() || undefined : undefined,
+		useSshAgent: usesAgent || undefined,
 		remoteRoot: normalizeRemote(form.remoteRoot.trim()) || '/',
 		localPath: form.localPath.trim() || undefined,
 		autoUpload: form.autoUpload,
@@ -243,8 +248,9 @@ async function handleBrowseRemotePath(
 		return;
 	}
 
-	const client = await createClientFromForm(panelContext, form);
+	let client: RemoteClient | undefined;
 	try {
+		client = await createClientFromForm(panelContext, form);
 		await client.connect();
 		const selected = await pickRemoteDirectory(client, normalizeRemote(form.remoteRoot.trim()) || '/');
 		if (selected) {
@@ -253,7 +259,7 @@ async function handleBrowseRemotePath(
 	} catch (err) {
 		panel.webview.postMessage({ type: 'error', message: `Could not browse remote server: ${(err as Error).message}` });
 	} finally {
-		await client.disconnect();
+		await client?.disconnect();
 	}
 }
 
@@ -268,15 +274,16 @@ async function handleTestConnection(
 		return;
 	}
 
-	const client = await createClientFromForm(panelContext, form);
+	let client: RemoteClient | undefined;
 	try {
+		client = await createClientFromForm(panelContext, form);
 		await client.connect();
 		await client.list(normalizeRemote(form.remoteRoot.trim()) || '/');
 		panel.webview.postMessage({ type: 'testResult', success: true, message: 'Connected successfully.' });
 	} catch (err) {
 		panel.webview.postMessage({ type: 'testResult', success: false, message: (err as Error).message });
 	} finally {
-		await client.disconnect();
+		await client?.disconnect();
 	}
 }
 
@@ -314,8 +321,9 @@ async function createClientFromForm(
 ): Promise<RemoteClient> {
 	const mayReuseSecrets = targetsSameEndpoint(existing, form);
 	const usesKeyAuth = form.protocol === 'sftp' && form.authMethod === 'key';
+	const usesAgent = form.protocol === 'sftp' && form.authMethod === 'agent';
 
-	const password = usesKeyAuth
+	const password = usesKeyAuth || usesAgent
 		? undefined
 		: form.password || (mayReuseSecrets && existing ? await secrets.getPassword(existing.id) : undefined);
 
@@ -333,6 +341,7 @@ async function createClientFromForm(
 		options.passphrase = usesKeyAuth
 			? form.passphrase || (mayReuseSecrets && existing ? await secrets.getPassphrase(existing.id) : undefined)
 			: undefined;
+		options.agent = usesAgent ? requireSshAgentSocket() : undefined;
 		options.hostKeyPolicy = hostKeys.policyFor(form.name.trim() || host, host, port);
 	}
 
@@ -423,7 +432,7 @@ async function renderForm(
 			host: existing?.host ?? '',
 			port: existing?.port === undefined ? '' : String(existing.port),
 			username: existing?.username ?? '',
-			authMethod: existing?.privateKeyPath ? 'key' : 'password',
+			authMethod: existing?.useSshAgent ? 'agent' : existing?.privateKeyPath ? 'key' : 'password',
 			privateKeyPath: existing?.privateKeyPath ?? '',
 			remoteRoot: existing?.remoteRoot ?? '/',
 			localPath: existing?.localPath ?? '',

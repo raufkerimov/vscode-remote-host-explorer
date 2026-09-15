@@ -77,7 +77,8 @@ remote-host-explorer/
 │   ├── commands/
 │   │   ├── shared.ts         # CommandServices, clipboard, `resolveSelection`, `guarded()`, server picker
 │   │   ├── serverCommands.ts # add/edit/remove/test/connect/disconnect
-│   │   ├── fileCommands.ts   # open/new/rename/delete/copy/cut/paste/backup/copy-path (multi-select)
+│   │   ├── fileCommands.ts   # open/new file+folder/rename/delete/copy/cut/paste/backup/copy-path
+│   │   ├── compareCommands.ts # Compare with Remote/Local via a read-only content provider
 │   │   └── transferCommands.ts # upload/download (tree + Explorer, multi-select) + auto-upload-on-save
 │   ├── config/
 │   │   ├── serverConfig.ts   # ServerProfile, project/global scoped storage, legacy settings migration
@@ -92,7 +93,8 @@ remote-host-explorer/
 │   │   ├── moveItems.ts      # Shared move logic for drag-and-drop and cut/paste
 │   │   ├── ConnectionManager.ts # Connection pool, in-flight dedupe, state change events
 │   │   ├── hostKeys.ts       # Trust-on-first-use SSH host key store
-│   │   ├── transfer.ts       # Recursive upload/download/copy with progress + cancellation
+│   │   ├── transfer.ts       # Recursive upload/download/copy: plan, then parallel transfer
+│   │   ├── sshTerminal.ts    # Pseudoterminal over an ssh2 exec channel on the pooled connection
 │   │   └── rsyncUpload.ts    # rsync-over-ssh uploads (argument construction is unit tested)
 │   ├── tree/
 │   │   └── RemoteTreeProvider.ts # TreeDataProvider + drag/drop; caches node identity
@@ -118,6 +120,18 @@ remote-host-explorer/
   directly (the server form is the one exception — it uses throwaway connections for Test/Browse).
 - `ConnectionManager` emits `onDidChangeConnection`; `extension.ts` subscribes to keep the tree's
   connected indicator accurate.
+- A successful connect starts a **session** that lasts until an explicit `disconnect()`. When a session's
+  connection drops, the server stays expandable and `getSessionClient(server)` reconnects on the next
+  use; it returns `undefined` for servers without a session, so the tree never connects by itself. Use it
+  (not `getExistingClient`) for tree listing and drops. A failed reconnect ends the session — otherwise
+  the refresh it triggers would retry in a loop.
+- The SSH terminal runs `exec` with a pty on the pooled SFTP connection (`SftpRemoteClient.openTerminal`,
+  reaching ssh2-sftp-client's untyped `client` property). It must not spawn the `ssh` binary: reusing the
+  connection keeps authentication, agent use, and host key verification in one place. `ssh2` is a
+  direct dependency because its types are imported.
+- FTPS picks implicit TLS on port 990 (`ftpSecurityFor`), explicit TLS otherwise. SSH agent auth
+  (`useSshAgent`) resolves the socket with `sshAgentSocket()`; on Windows it falls back to the OpenSSH
+  agent pipe.
 - `SftpRemoteClient` listens to `close`/`end`/`error` and clears broken connections automatically.
 - `FtpRemoteClient`: an FTP control connection runs **one command at a time** (`basic-ftp` throws
   otherwise), so every public method goes through `run()`, a serial queue. Inside `run()`, use the
@@ -204,8 +218,10 @@ remote-host-explorer/
   `resolveSelection(clicked, selected, treeView.selection)`, and drop children of selected folders with
   `withoutNestedSelections` before acting. Single-item actions (rename, new file, paste target) use
   `!listMultiSelection` in their `when` clause.
-- File/directory rows have context values `remoteHostExplorer.{file|directory}.{mapped|unmapped}` (see
-  `fileContextValue`). Match them with a regex, never `==`. Actions that need a `localPath` use a
+- File/directory rows have context values `remoteHostExplorer.{file|directory}.{protocol}.{mapped|unmapped}`
+  (`fileContextValue`); server rows `remoteHostExplorer.server.{connected|disconnected}.{protocol}`
+  (`serverContextValue`, where "connected" includes a dropped session). Match them with a regex, never
+  `==`; a test checks the menu regexes against real values. Actions that need a `localPath` use a
   command `enablement` of `viewItem =~ /\.mapped$/` so they appear greyed out rather than hidden.
 - Menus and keybindings for the tree must use tree-specific commands (e.g. `downloadRemoteItem`) rather
   than sharing an Explorer command, because `enablement` applies everywhere a command appears.
@@ -213,6 +229,11 @@ remote-host-explorer/
 ### 8. Transfers
 - All recursive work lives in `remote/transfer.ts` and runs inside `withTransferProgress`, which
   provides the progress notification and cancellation token. Honour `run.token`.
+- Folder transfers are two-phase: a sequential **plan** (create directories, apply ignore patterns, ask
+  every overwrite question) and then `runWithLimit` over the planned files — `SFTP_PARALLEL_TRANSFERS`
+  for SFTP, 1 for FTP. Never prompt from inside the parallel phase; concurrent modals would interleave.
+- Tree drops accept `text/uri-list` (file manager / Explorer) and upload through `uploadPath`, asking
+  `promptForConflict` before replacing an existing remote item.
 - `ignoreGlobs` are evaluated relative to the profile's `localPath` and apply to auto-upload and
   recursive transfers, not to an explicitly requested single-file upload.
 - `DEFAULT_IGNORE_GLOBS` in `config/serverConfig.ts` is the single source of the defaults (the form and

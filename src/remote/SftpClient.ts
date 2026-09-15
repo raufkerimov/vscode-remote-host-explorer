@@ -1,4 +1,5 @@
 import * as fs from 'fs';
+import type { Client as SshConnection, ClientChannel } from 'ssh2';
 import SftpClientLib from 'ssh2-sftp-client';
 import {
 	isConnectionLostError,
@@ -77,6 +78,7 @@ export class SftpRemoteClient implements RemoteClient {
 				password: this.options.password,
 				privateKey,
 				passphrase: this.options.passphrase,
+				agent: this.options.agent,
 				readyTimeout: READY_TIMEOUT_MS,
 				keepaliveInterval: KEEPALIVE_INTERVAL_MS,
 				...(policy
@@ -136,6 +138,23 @@ export class SftpRemoteClient implements RemoteClient {
 			}
 			throw err;
 		}
+	}
+
+	/**
+	 * Runs `command` in a pseudo-terminal on this client's SSH connection, so an interactive shell reuses
+	 * the session's authentication and verified host key instead of logging in again.
+	 */
+	async openTerminal(command: string, size: { rows: number; cols: number }): Promise<ClientChannel> {
+		return this.wrapOp(
+			() =>
+				new Promise<ClientChannel>((resolve, reject) => {
+					// ssh2-sftp-client keeps its ssh2 connection in an untyped `client` property.
+					const connection = (this.client as unknown as { client: SshConnection }).client;
+					connection.exec(command, { pty: { term: 'xterm-256color', ...size } }, (err, channel) =>
+						err ? reject(err) : resolve(channel)
+					);
+				})
+		);
 	}
 
 	async list(remotePath: string): Promise<RemoteFileEntry[]> {
@@ -201,6 +220,10 @@ export class SftpRemoteClient implements RemoteClient {
 
 	async get(remotePath: string, localPath: string): Promise<void> {
 		await this.wrapOp(() => this.client.fastGet(remotePath, localPath));
+	}
+
+	async readFile(remotePath: string): Promise<Buffer> {
+		return this.wrapOp(async () => (await this.client.get(remotePath)) as Buffer);
 	}
 
 	async put(localPath: string, remotePath: string): Promise<void> {

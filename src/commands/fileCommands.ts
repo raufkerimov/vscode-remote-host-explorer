@@ -17,16 +17,20 @@ function targetDirectoryOf(target: TargetNode): string {
 	return target.entry.isDirectory ? normalizeRemote(target.entry.path) : dirnameRemote(target.entry.path);
 }
 
-function validateFileName(value: string): string | undefined {
-	const name = value.trim();
-	if (!name) {
-		return 'Enter a file name.';
-	}
-	if (name === '.' || name === '..' || name.includes('/') || name.includes('\\')) {
-		return 'Enter a file name, not a path.';
-	}
-	return undefined;
+function nameValidator(kind: 'file' | 'folder') {
+	return (value: string): string | undefined => {
+		const name = value.trim();
+		if (!name) {
+			return `Enter a ${kind} name.`;
+		}
+		if (name === '.' || name === '..' || name.includes('/') || name.includes('\\')) {
+			return `Enter a ${kind} name, not a path.`;
+		}
+		return undefined;
+	};
 }
+
+const validateFileName = nameValidator('file');
 
 /** `name.ext` -> `name<suffix>.ext`, keeping dotfiles like `.env` intact. */
 function withNameSuffix(name: string, suffix: string): string {
@@ -66,6 +70,44 @@ export function registerFileCommands(services: CommandServices): vscode.Disposab
 		}
 	};
 
+	/** New File / New Folder in the clicked folder, the clicked file's folder, or the server root. */
+	const createRemoteItem = async (kind: 'file' | 'folder', target?: TargetNode): Promise<void> => {
+		target ??= treeView.selection[0];
+		if (!target) {
+			return;
+		}
+		const name = (
+			await vscode.window.showInputBox({
+				prompt: kind === 'file' ? 'New remote file name' : 'New remote folder name',
+				placeHolder: kind === 'file' ? 'index.php' : 'assets',
+				ignoreFocusOut: true,
+				validateInput: nameValidator(kind),
+			})
+		)?.trim();
+		if (!name) {
+			return;
+		}
+
+		const server = target.server;
+		const remoteDirectory = targetDirectoryOf(target);
+		const remotePath = joinRemote(remoteDirectory, name);
+		const client = await connections.getClient(server);
+
+		// Writing straight over an existing file would silently replace it with an empty one.
+		if (await client.exists(remotePath)) {
+			vscode.window.showErrorMessage(`"${name}" already exists in ${remoteDirectory}.`);
+			return;
+		}
+
+		if (kind === 'file') {
+			await client.writeFile(remotePath, Buffer.alloc(0));
+		} else {
+			await client.mkdir(remotePath);
+		}
+		vscode.window.showInformationMessage(`Created remote ${kind} ${remotePath}`);
+		treeProvider.refreshDirectory(server, remoteDirectory);
+	};
+
 	return [
 		vscode.commands.registerCommand(
 			'remoteHostExplorer.openRemoteFile',
@@ -78,36 +120,12 @@ export function registerFileCommands(services: CommandServices): vscode.Disposab
 
 		vscode.commands.registerCommand(
 			'remoteHostExplorer.newFile',
-			guarded('Failed to create the remote file', async (target?: TargetNode) => {
-				target ??= treeView.selection[0];
-				if (!target) {
-					return;
-				}
-				const fileName = await vscode.window.showInputBox({
-					prompt: 'New remote file name',
-					placeHolder: 'index.php',
-					ignoreFocusOut: true,
-					validateInput: validateFileName,
-				});
-				if (!fileName) {
-					return;
-				}
+			guarded('Failed to create the remote file', (target?: TargetNode) => createRemoteItem('file', target))
+		),
 
-				const server = target.server;
-				const remoteDirectory = targetDirectoryOf(target);
-				const remotePath = joinRemote(remoteDirectory, fileName.trim());
-				const client = await connections.getClient(server);
-
-				// Writing straight over an existing file would silently replace it with an empty one.
-				if (await client.exists(remotePath)) {
-					vscode.window.showErrorMessage(`"${fileName.trim()}" already exists in ${remoteDirectory}.`);
-					return;
-				}
-
-				await client.writeFile(remotePath, Buffer.alloc(0));
-				vscode.window.showInformationMessage(`Created remote file ${remotePath}`);
-				treeProvider.refreshDirectory(server, remoteDirectory);
-			})
+		vscode.commands.registerCommand(
+			'remoteHostExplorer.newFolder',
+			guarded('Failed to create the remote folder', (target?: TargetNode) => createRemoteItem('folder', target))
 		),
 
 		vscode.commands.registerCommand(

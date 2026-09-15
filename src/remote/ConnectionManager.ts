@@ -10,6 +10,11 @@ export class ConnectionManager {
 	private readonly clients = new Map<string, RemoteClient>();
 	/** In-flight connection attempts, so concurrent callers share one handshake instead of racing. */
 	private readonly pending = new Map<string, Promise<RemoteClient>>();
+	/**
+	 * Servers connected and not explicitly disconnected. When such a connection drops (network change,
+	 * server idle timeout), the tree keeps the server open and reconnects the next time it is used.
+	 */
+	private readonly sessions = new Set<string>();
 	private readonly onDidChangeConnectionEmitter = new vscode.EventEmitter<string>();
 	/** Fires with the server id whenever a connection is established or torn down, from any code path. */
 	readonly onDidChangeConnection = this.onDidChangeConnectionEmitter.event;
@@ -51,10 +56,14 @@ export class ConnectionManager {
 		try {
 			await client.connect();
 		} catch (err) {
+			// A failed reconnect ends the session. Otherwise the tree would refresh, try again, fail, and
+			// refresh again in a loop of error messages.
+			this.sessions.delete(server.id);
 			this.onDidChangeConnectionEmitter.fire(server.id);
 			throw err;
 		}
 
+		this.sessions.add(server.id);
 		this.clients.set(server.id, client);
 		this.onDidChangeConnectionEmitter.fire(server.id);
 		return client;
@@ -68,10 +77,13 @@ export class ConnectionManager {
 	}
 
 	async disconnect(serverId: string): Promise<void> {
+		const hadSession = this.sessions.delete(serverId);
 		const client = this.clients.get(serverId);
 		if (client) {
 			this.clients.delete(serverId);
 			await client.disconnect().catch(() => {});
+		}
+		if (client || hadSession) {
 			this.onDidChangeConnectionEmitter.fire(serverId);
 		}
 	}
@@ -79,6 +91,24 @@ export class ConnectionManager {
 	isConnected(serverId: string): boolean {
 		const client = this.clients.get(serverId);
 		return client?.isConnected() ?? false;
+	}
+
+	/** True when the server was connected and not disconnected, even if the connection has since dropped. */
+	hasSession(serverId: string): boolean {
+		return this.sessions.has(serverId);
+	}
+
+	/**
+	 * The client for a server the user is working with: the live one, or a fresh one when the session's
+	 * connection dropped. `undefined` for a server that was never connected, so browsing never opens a
+	 * connection the user didn't ask for.
+	 */
+	async getSessionClient(server: ServerProfile): Promise<RemoteClient | undefined> {
+		const existing = this.getExistingClient(server.id);
+		if (existing) {
+			return existing;
+		}
+		return this.sessions.has(server.id) ? this.getClient(server) : undefined;
 	}
 
 	/** Returns the live client only if already connected; never establishes a new connection. */
@@ -90,6 +120,7 @@ export class ConnectionManager {
 	async disposeAll(): Promise<void> {
 		const clients = [...this.clients.values()];
 		this.clients.clear();
+		this.sessions.clear();
 		await Promise.all(clients.map(client => client.disconnect().catch(() => {})));
 	}
 }

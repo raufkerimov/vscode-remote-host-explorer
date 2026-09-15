@@ -9,8 +9,8 @@ import { guarded, resolveSelection, type CommandServices } from './shared';
 const NO_MAPPING_MESSAGE =
 	'No server mapping found for this file. Add a "Local mapped folder" to a server profile first.';
 
-/** Local destination for a tree download, derived from the server's path mapping. */
-function localTargetFor(server: ServerProfile, remotePath: string): string | undefined {
+/** Local counterpart of a remote path, derived from the server's path mapping. */
+export function localTargetFor(server: ServerProfile, remotePath: string): string | undefined {
 	if (!server.localPath) {
 		return undefined;
 	}

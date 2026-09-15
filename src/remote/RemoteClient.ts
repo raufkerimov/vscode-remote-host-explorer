@@ -17,6 +17,8 @@ export interface RemoteClient {
 	stat(remotePath: string): Promise<RemoteFileEntry | undefined>;
 	exists(remotePath: string): Promise<boolean>;
 	get(remotePath: string, localPath: string): Promise<void>;
+	/** Reads a whole remote file into memory, e.g. for a read-only diff. */
+	readFile(remotePath: string): Promise<Buffer>;
 	put(localPath: string, remotePath: string): Promise<void>;
 	/** Writes in-memory contents directly, without staging a local temp file. */
 	writeFile(remotePath: string, contents: Buffer): Promise<void>;
@@ -41,6 +43,8 @@ export interface RemoteConnectionOptions {
 	password?: string;
 	privateKeyPath?: string;
 	passphrase?: string;
+	/** SFTP only: ssh-agent socket path (or Windows named pipe) to authenticate with. */
+	agent?: string;
 	/**
 	 * Two-phase host key verification. Omitting it disables verification entirely, which ssh2 would
 	 * otherwise do silently.

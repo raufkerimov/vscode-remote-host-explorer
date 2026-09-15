@@ -1,6 +1,6 @@
 import * as assert from 'assert';
 import { resolveSelection } from '../commands/shared';
-import { fileContextValue, withoutNestedSelections } from '../tree/RemoteTreeProvider';
+import { fileContextValue, serverContextValue, withoutNestedSelections } from '../tree/RemoteTreeProvider';
 import type { ServerProfile } from '../config/serverConfig';
 import type { RemoteFileEntry } from '../remote/RemoteClient';
 
@@ -57,14 +57,14 @@ suite('fileContextValue', () => {
 	const base: ServerProfile = { id: 's', name: 's', protocol: 'sftp', host: 'h', remoteRoot: '/' };
 
 	test('marks rows of a server without a local folder as unmapped', () => {
-		assert.strictEqual(fileContextValue(entry('/a.txt'), base), 'remoteHostExplorer.file.unmapped');
-		assert.strictEqual(fileContextValue(entry('/dir', true), base), 'remoteHostExplorer.directory.unmapped');
+		assert.strictEqual(fileContextValue(entry('/a.txt'), base), 'remoteHostExplorer.file.sftp.unmapped');
+		assert.strictEqual(fileContextValue(entry('/dir', true), base), 'remoteHostExplorer.directory.sftp.unmapped');
 	});
 
 	test('marks rows of a server with a local folder as mapped', () => {
 		const mapped = { ...base, localPath: '/projects/site' };
-		assert.strictEqual(fileContextValue(entry('/a.txt'), mapped), 'remoteHostExplorer.file.mapped');
-		assert.strictEqual(fileContextValue(entry('/dir', true), mapped), 'remoteHostExplorer.directory.mapped');
+		assert.strictEqual(fileContextValue(entry('/a.txt'), mapped), 'remoteHostExplorer.file.sftp.mapped');
+		assert.strictEqual(fileContextValue(entry('/dir', true), mapped), 'remoteHostExplorer.directory.sftp.mapped');
 	});
 
 	test('matches the enablement and menu patterns declared in package.json', () => {
@@ -78,4 +78,30 @@ suite('fileContextValue', () => {
 		assert.ok(enablement.test(fileContextValue(entry('/a.txt'), mapped)));
 		assert.ok(!enablement.test(fileContextValue(entry('/a.txt'), base)));
 	});
+
+	test('SSH-only and connection menus match the right rows', () => {
+		const manifest = require('../../package.json');
+		const whenOf = (command: string, index = 0) =>
+			manifest.contributes.menus['view/item/context']
+				.filter((item: { command: string }) => item.command === `remoteHostExplorer.${command}`)
+				[index].when as string;
+		const regexIn = (when: string) => when.match(/viewItem =~ \/(.*?)\/(?:\s|\)|$)/g)!.map(part => new RegExp(part.replace(/^viewItem =~ \//, '').replace(/\/[\s)]*$/, '')));
+		const matchesAny = (when: string, value: string) => regexIn(when).some(regex => regex.test(value));
+		const ftp = { ...base, protocol: 'ftp' as const };
+
+		const serverTerminal = whenOf('openSshTerminal', 0);
+		assert.ok(matchesAny(serverTerminal, serverContextValue(base, false)));
+		assert.ok(matchesAny(serverTerminal, serverContextValue(base, true)));
+		assert.ok(!matchesAny(serverTerminal, serverContextValue(ftp, true)));
+
+		const folderTerminal = whenOf('openSshTerminal', 1);
+		assert.ok(matchesAny(folderTerminal, fileContextValue(entry('/dir', true), base)));
+		assert.ok(!matchesAny(folderTerminal, fileContextValue(entry('/dir', true), ftp)));
+
+		assert.ok(matchesAny(whenOf('disconnect'), serverContextValue(ftp, true)));
+		assert.ok(!matchesAny(whenOf('disconnect'), serverContextValue(ftp, false)));
+		assert.ok(matchesAny(whenOf('connect'), serverContextValue(ftp, false)));
+		assert.ok(matchesAny(whenOf('newFolder'), serverContextValue(ftp, true)));
+	});
 });
+

@@ -34,7 +34,7 @@
 	const statusEl = byId('status');
 	const errorEl = byId('error');
 	const testButton = byId('testConnection');
-	const sections = { password: byId('auth-password'), key: byId('auth-key') };
+	const sections = { password: byId('auth-password'), key: byId('auth-key'), agent: byId('auth-agent') };
 
 	function populateProtocols() {
 		protocolEl.textContent = '';
@@ -120,6 +120,7 @@
 		rsyncSection.classList.toggle('active', isSftp());
 		insecureWarning.classList.toggle('active', protocolEl.value === 'ftp');
 		byId('port').placeholder = String(initial.defaultPorts[protocolEl.value] ?? '');
+		byId('port-hint').textContent = protocolEl.value === 'ftps' ? '(optional; 990 uses implicit TLS)' : '(optional)';
 		updateAuthSection();
 	}
 

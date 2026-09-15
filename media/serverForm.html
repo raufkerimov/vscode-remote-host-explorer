@@ -25,7 +25,7 @@
 			</label>
 		</div>
 		<div>
-			<label>Port <span class="hint">(optional)</span>
+			<label>Port <span class="hint" id="port-hint">(optional)</span>
 				<input type="number" id="port" min="1" max="65535">
 			</label>
 		</div>
@@ -42,6 +42,7 @@
 		<select id="authMethod">
 			<option value="password">Password</option>
 			<option value="key">Private key</option>
+			<option value="agent">SSH agent</option>
 		</select>
 	</label>
 	<div id="auth-password" class="auth-section">
@@ -59,6 +60,11 @@
 		<label>Key passphrase <span class="hint" id="passphrase-hint"></span>
 			<input type="password" id="passphrase" autocomplete="off">
 		</label>
+	</div>
+
+	<div id="auth-agent" class="auth-section">
+		<p class="hint">Uses the keys loaded in your running SSH agent (ssh-agent, or the OpenSSH
+			Authentication Agent on Windows). No password or key is saved for this server.</p>
 	</div>
 
 	<label>Remote root path

@@ -18,10 +18,14 @@ export interface MoveResult {
 	affectedDirectories: Set<string>;
 }
 
-export async function promptForConflict(name: string, targetDir: string): Promise<ConflictDecision> {
+export async function promptForConflict(
+	name: string,
+	targetDir: string,
+	detail = 'Moving it here would replace the existing item.'
+): Promise<ConflictDecision> {
 	const choice = await vscode.window.showWarningMessage(
 		`"${name}" already exists in ${targetDir}.`,
-		{ modal: true, detail: 'Moving it here would replace the existing item.' },
+		{ modal: true, detail },
 		'Replace',
 		'Skip'
 	);

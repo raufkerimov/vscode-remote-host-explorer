@@ -9,6 +9,19 @@ import {
 import { basenameRemote, dirnameRemote, joinRemote, normalizeRemote } from '../util/remotePath';
 
 export const DEFAULT_FTP_PORT = 21;
+/** The port FTPS servers use for implicit TLS, where the connection is encrypted from the first byte. */
+export const IMPLICIT_FTPS_PORT = 990;
+
+/** `true` = explicit TLS (AUTH TLS), `'implicit'` = TLS from the start, `false` = plain FTP. */
+export type FtpSecurity = boolean | 'implicit';
+
+/** FTPS on port 990 is implicit TLS by convention; every other FTPS port negotiates explicit TLS. */
+export function ftpSecurityFor(protocol: 'ftp' | 'ftps', port: number): FtpSecurity {
+	if (protocol === 'ftp') {
+		return false;
+	}
+	return port === IMPLICIT_FTPS_PORT ? 'implicit' : true;
+}
 const TIMEOUT_MS = 30_000;
 
 /** FTP reply code for "file unavailable" — used by servers for both "not found" and "no access". */
@@ -19,7 +32,7 @@ function isFtpFileUnavailable(error: unknown): boolean {
 }
 
 /**
- * FTP / explicit-TLS FTPS client backed by `basic-ftp`.
+ * FTP / FTPS (explicit or implicit TLS) client backed by `basic-ftp`.
  *
  * Two properties of FTP drive the design:
  * - A control connection runs exactly one command at a time; `basic-ftp` throws if a second task starts.
@@ -35,7 +48,7 @@ export class FtpRemoteClient implements RemoteClient {
 
 	constructor(
 		private readonly options: RemoteConnectionOptions,
-		private readonly secure: boolean,
+		private readonly secure: FtpSecurity,
 		private readonly onClose?: () => void
 	) {}
 
@@ -86,8 +99,8 @@ export class FtpRemoteClient implements RemoteClient {
 				port: this.options.port ?? DEFAULT_FTP_PORT,
 				user: this.options.username,
 				password: this.options.password,
-				// Explicit TLS (AUTH TLS). Certificate verification stays on: a self-signed certificate is
-				// rejected rather than silently trusted.
+				// Certificate verification stays on for both TLS modes: a self-signed certificate is rejected
+				// rather than silently trusted.
 				secure: this.secure,
 			});
 			this.homeDir = normalizeRemote(await this.client.pwd()) || '/';
@@ -199,6 +212,22 @@ export class FtpRemoteClient implements RemoteClient {
 		await this.run(client => client.downloadTo(localPath, this.resolve(remotePath)));
 	}
 
+	async readFile(remotePath: string): Promise<Buffer> {
+		return this.run(client => this.readWith(client, remotePath));
+	}
+
+	private async readWith(client: BasicFtpClient, remotePath: string): Promise<Buffer> {
+		const chunks: Buffer[] = [];
+		const sink = new Writable({
+			write(chunk: Buffer, _encoding, callback) {
+				chunks.push(chunk);
+				callback();
+			},
+		});
+		await client.downloadTo(sink, this.resolve(remotePath));
+		return Buffer.concat(chunks);
+	}
+
 	async put(localPath: string, remotePath: string): Promise<void> {
 		await this.run(client => client.uploadFrom(localPath, this.resolve(remotePath)));
 	}
@@ -210,15 +239,8 @@ export class FtpRemoteClient implements RemoteClient {
 	async copy(fromPath: string, toPath: string): Promise<void> {
 		await this.run(async client => {
 			// FTP has no server-side copy; the bytes round-trip through memory on the same connection.
-			const chunks: Buffer[] = [];
-			const sink = new Writable({
-				write(chunk: Buffer, _encoding, callback) {
-					chunks.push(chunk);
-					callback();
-				},
-			});
-			await client.downloadTo(sink, this.resolve(fromPath));
-			await client.uploadFrom(Readable.from(Buffer.concat(chunks)), this.resolve(toPath));
+			const contents = await this.readWith(client, fromPath);
+			await client.uploadFrom(Readable.from(contents), this.resolve(toPath));
 		});
 	}
 

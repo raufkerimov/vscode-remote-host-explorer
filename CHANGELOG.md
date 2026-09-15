@@ -3,6 +3,19 @@
 All notable changes to Remote Host Explorer are documented here.
 This project follows [Semantic Versioning](https://semver.org/).
 
+## [0.1.4] - 2026-09-15
+
+- **New Folder...** in the Remote Hosts view.
+- **Compare with Remote** (Explorer and editor tab) and **Compare with Local** (Remote Hosts view) show
+  a local file and the server's copy side by side.
+- **Drag files and folders** from your file manager or the Explorer onto a remote folder to upload them.
+- **Faster folder transfers** over SFTP: up to four files are sent at once.
+- **Open SSH Terminal** on an SFTP server or folder, using the existing connection.
+- **SSH agent** authentication for SFTP servers.
+- **Implicit TLS** for FTPS servers on port 990.
+- A connection that drops is re-established the next time you use the server, instead of the server
+  showing as disconnected.
+
 ## [0.1.3] - 2026-09-15
 
 - **This project only** servers are now saved in `.vscode/remote-hosts.json` instead of
