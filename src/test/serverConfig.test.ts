@@ -1,6 +1,7 @@
 import * as assert from 'assert';
 import * as path from 'path';
-import { isIgnored, resolveServerForLocalPathIn, type ServerProfile } from '../config/serverConfig';
+import { expandHome } from '../util/localPath';
+import { isIgnored, localPathForRemote, resolveServerForLocalPathIn, type ServerProfile } from '../config/serverConfig';
 
 function profile(overrides: Partial<ServerProfile> & Pick<ServerProfile, 'id'>): ServerProfile {
 	return {
@@ -94,3 +95,62 @@ suite('isIgnored', () => {
 		assert.ok(isIgnored(profile({ id: 'a' }), 'node_modules/x'));
 	});
 });
+
+suite('remote mapped folder', () => {
+	// Browse the whole WordPress install, but map only the theme.
+	const wordpress = profile({
+		id: 'wp',
+		remoteRoot: '/var/www/site',
+		localPath: local('projects', 'my-theme'),
+		remoteMappedPath: '/var/www/site/wp-content/themes/my-theme',
+	});
+
+	test('local files resolve against the remote mapped folder, not the root', () => {
+		const result = resolveServerForLocalPathIn([wordpress], local('projects', 'my-theme', 'css', 'style.css'));
+		assert.strictEqual(result?.remotePath, '/var/www/site/wp-content/themes/my-theme/css/style.css');
+		assert.strictEqual(
+			resolveServerForLocalPathIn([wordpress], local('projects', 'my-theme'))?.remotePath,
+			'/var/www/site/wp-content/themes/my-theme'
+		);
+	});
+
+	test('remote items inside the mapped folder have a local counterpart', () => {
+		assert.strictEqual(
+			localPathForRemote(wordpress, '/var/www/site/wp-content/themes/my-theme/functions.php'),
+			local('projects', 'my-theme', 'functions.php')
+		);
+		assert.strictEqual(localPathForRemote(wordpress, '/var/www/site/wp-content/themes/my-theme'), local('projects', 'my-theme'));
+	});
+
+	test('remote items outside the mapped folder have none', () => {
+		assert.strictEqual(localPathForRemote(wordpress, '/var/www/site/wp-config.php'), undefined);
+		assert.strictEqual(localPathForRemote(wordpress, '/var/www/site/wp-content/themes/my-theme-old/a.php'), undefined);
+	});
+
+	test('without a remote mapped folder the root is used, as before', () => {
+		const plain = profile({ id: 'p', remoteRoot: '/var/www', localPath: local('projects', 'site') });
+		assert.strictEqual(localPathForRemote(plain, '/var/www/index.php'), local('projects', 'site', 'index.php'));
+		assert.strictEqual(localPathForRemote({ ...plain, localPath: undefined }, '/var/www/index.php'), undefined);
+	});
+
+	test('a remote name cannot escape the local folder', () => {
+		const target = localPathForRemote(wordpress, '/var/www/site/wp-content/themes/my-theme/../../../../../etc/passwd');
+		assert.strictEqual(target, undefined);
+	});
+});
+
+suite('expandHome', () => {
+	const home = local('home', 'me');
+
+	test('expands a leading ~ to the home folder', () => {
+		assert.strictEqual(expandHome('~/.ssh/id_rsa', home), path.join(home, '.ssh', 'id_rsa'));
+		assert.strictEqual(expandHome('~', home), home);
+	});
+
+	test('leaves every other path alone', () => {
+		assert.strictEqual(expandHome('/keys/id_rsa', home), '/keys/id_rsa');
+		assert.strictEqual(expandHome('~other/id_rsa', home), '~other/id_rsa');
+		assert.strictEqual(expandHome('keys/~/id_rsa', home), 'keys/~/id_rsa');
+	});
+});
+

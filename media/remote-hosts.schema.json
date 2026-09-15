@@ -54,7 +54,7 @@
           },
           "privateKeyPath": {
             "type": "string",
-            "description": "Path to an SSH private key. Setting this selects key authentication."
+            "description": "Path to an SSH private key. Setting this selects key authentication. A leading ~ means your home folder, e.g. ~/.ssh/id_rsa."
           },
           "useSshAgent": {
             "type": "boolean",
@@ -63,11 +63,15 @@
           },
           "remoteRoot": {
             "type": "string",
-            "description": "Root path on the remote server to browse."
+            "description": "Root path on the remote server shown in the Remote Hosts view."
           },
           "localPath": {
             "type": "string",
-            "description": "Local folder mapped to remoteRoot for upload/download resolution."
+            "description": "Local folder mapped to remoteMappedPath (or remoteRoot when that is not set) for upload/download resolution."
+          },
+          "remoteMappedPath": {
+            "type": "string",
+            "description": "Server folder that localPath corresponds to. Defaults to remoteRoot. Set it to browse a larger folder while mapping only part of it, for example a whole WordPress install with only the theme mapped."
           },
           "autoUpload": {
             "type": "boolean",

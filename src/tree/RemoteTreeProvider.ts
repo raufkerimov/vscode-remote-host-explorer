@@ -2,6 +2,8 @@ import * as path from 'path';
 import * as vscode from 'vscode';
 import {
 	getScopedServerProfiles,
+	localPathForRemote,
+	mappedRemoteRoot,
 	whenServerProfilesLoaded,
 	type ProfileScope,
 	type ServerProfile,
@@ -35,12 +37,14 @@ export class ServerNode {
 
 /**
  * Context value for a file/directory row: `remoteHostExplorer.<file|directory>.<protocol>.<mapped|unmapped>`.
- * The last segment records whether the server has a `localPath`, so menu entries that need one
- * (Download, Compare) can be disabled in `package.json`; the protocol gates SSH-only actions.
+ * The last segment records whether the row has a local counterpart — the server has a `localPath` and the
+ * row is inside its remote mapped folder — so Download and Compare can be disabled in `package.json`; the
+ * protocol gates SSH-only actions.
  */
 export function fileContextValue(entry: RemoteFileEntry, server: ServerProfile): string {
 	const kind = entry.isDirectory ? 'directory' : 'file';
-	return `remoteHostExplorer.${kind}.${server.protocol}.${server.localPath ? 'mapped' : 'unmapped'}`;
+	const mapped = localPathForRemote(server, entry.path) !== undefined;
+	return `remoteHostExplorer.${kind}.${server.protocol}.${mapped ? 'mapped' : 'unmapped'}`;
 }
 
 /**
@@ -173,7 +177,9 @@ export class RemoteTreeProvider implements vscode.TreeDataProvider<TreeNode>, vs
 			item.tooltip =
 				`${node.server.name}\n${node.server.protocol}://${node.server.host}\nRoot: ${node.server.remoteRoot}\n` +
 				(node.scope === 'project' ? 'Available in this project only' : 'Available in all projects') +
-				(node.server.localPath ? `\nLocal folder: ${node.server.localPath}` : '\nNo local folder mapped');
+				(node.server.localPath
+					? `\nLocal folder: ${node.server.localPath} ↔ ${mappedRemoteRoot(node.server)}`
+					: '\nNo local folder mapped');
 			return item;
 		}
 

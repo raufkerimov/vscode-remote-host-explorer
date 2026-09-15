@@ -1,4 +1,6 @@
 import * as assert from 'assert';
+import * as os from 'os';
+import * as path from 'path';
 import { buildRsyncArgs, missingRsyncMessage } from '../remote/rsyncUpload';
 import type { ServerProfile } from '../config/serverConfig';
 
@@ -26,6 +28,14 @@ suite('buildRsyncArgs', () => {
 		const ssh = sshCommandOf(args);
 		assert.ok(ssh.includes(`-i '/Users/me/My Keys/id_rsa'`), ssh);
 		assert.ok(ssh.includes('-p 2222'), ssh);
+	});
+
+	test('expands ~ in the key path, which ssh would otherwise read literally', () => {
+		const args = buildRsyncArgs(
+			profile({ privateKeyPath: '~/.ssh/id_rsa' }),
+			{ localPath: '/local/a.txt', remotePath: '/var/www/a.txt', isDirectory: false }
+		);
+		assert.ok(sshCommandOf(args).includes(`-i '${path.join(os.homedir(), '.ssh', 'id_rsa')}'`), sshCommandOf(args));
 	});
 
 	test('escapes an embedded single quote', () => {

@@ -18,6 +18,7 @@
 		'privateKeyPath',
 		'remoteRoot',
 		'localPath',
+		'remoteMappedPath',
 		'ignoreGlobs',
 		'rsyncOptions',
 	];
@@ -128,10 +129,15 @@
 
 	populateProtocols();
 	configureScope();
-	byId('heading').textContent = initial.isEdit ? 'Edit Server' : 'Add Server';
+	byId('heading').textContent = initial.isEdit ? 'Edit Server' : initial.isDuplicate ? 'Duplicate Server' : 'Add Server';
 	byId('save').textContent = initial.isEdit ? 'Save' : 'Add Server';
-	byId('password-hint').textContent = initial.isEdit ? '(leave blank to keep existing)' : '';
-	byId('passphrase-hint').textContent = initial.isEdit ? '(leave blank to keep existing)' : '(optional)';
+	const keepHint = initial.isEdit
+		? '(leave blank to keep existing)'
+		: initial.isDuplicate
+			? "(leave blank to use the original server's)"
+			: '';
+	byId('password-hint').textContent = keepHint;
+	byId('passphrase-hint').textContent = keepHint || '(optional)';
 
 	applyValues(initial.values);
 	// A restored state (window reload, or the tab coming back into view) wins over the stored profile.
@@ -166,7 +172,10 @@
 		vscode.postMessage({ type: 'browseLocalFolder', field: 'localPath' });
 	});
 	byId('browseRemoteRoot').addEventListener('click', () => {
-		vscode.postMessage({ type: 'browseRemotePath', payload: currentFormPayload() });
+		vscode.postMessage({ type: 'browseRemotePath', field: 'remoteRoot', payload: currentFormPayload() });
+	});
+	byId('browseRemoteMappedPath').addEventListener('click', () => {
+		vscode.postMessage({ type: 'browseRemotePath', field: 'remoteMappedPath', payload: currentFormPayload() });
 	});
 
 	testButton.addEventListener('click', () => {

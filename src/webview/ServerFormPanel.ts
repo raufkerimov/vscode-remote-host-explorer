@@ -2,7 +2,13 @@ import * as crypto from 'crypto';
 import * as fs from 'fs';
 import * as vscode from 'vscode';
 import type { ProfileScope, RemoteProtocol, ServerProfile } from '../config/serverConfig';
-import { DEFAULT_IGNORE_GLOBS, getProfileScope, hasProjectScope, upsertServerProfile } from '../config/serverConfig';
+import {
+	DEFAULT_IGNORE_GLOBS,
+	DEFAULT_PRIVATE_KEY_PATH,
+	getProfileScope,
+	hasProjectScope,
+	upsertServerProfile,
+} from '../config/serverConfig';
 import type { SecretsManager } from '../config/secrets';
 import { buildRemoteClient, defaultPortFor, requireSshAgentSocket } from '../remote/clientFactory';
 import type { HostKeyStore } from '../remote/hostKeys';
@@ -21,7 +27,7 @@ function isSupportedProtocol(value: string): value is RemoteProtocol {
 }
 
 
-interface SubmittedForm {
+export interface SubmittedForm {
 	name: string;
 	protocol: ServerProfile['protocol'];
 	host: string;
@@ -33,6 +39,7 @@ interface SubmittedForm {
 	passphrase: string;
 	remoteRoot: string;
 	localPath: string;
+	remoteMappedPath: string;
 	autoUpload: boolean;
 	ignoreGlobs: string;
 	useRsyncForUpload: boolean;
@@ -43,7 +50,7 @@ interface SubmittedForm {
 type IncomingMessage =
 	| { type: 'cancel' }
 	| { type: 'submit'; payload: SubmittedForm }
-	| { type: 'browseRemotePath'; payload: SubmittedForm }
+	| { type: 'browseRemotePath'; field: 'remoteRoot' | 'remoteMappedPath'; payload: SubmittedForm }
 	| { type: 'testConnection'; payload: SubmittedForm }
 	| { type: 'browseLocalFile' | 'browseLocalFolder'; field: 'privateKeyPath' | 'localPath' };
 
@@ -51,10 +58,20 @@ interface PanelContext {
 	context: vscode.ExtensionContext;
 	secrets: SecretsManager;
 	hostKeys: HostKeyStore;
+	/** The profile being edited; saving overwrites it. */
 	existing?: ServerProfile;
+	/** The profile the form was filled from: `existing` when editing, the original when duplicating. */
+	source?: ServerProfile;
 }
 
-/** Single-form webview for adding/editing a server. */
+export interface ServerFormOptions {
+	/** Edit this profile. */
+	existing?: ServerProfile;
+	/** Start a new profile from a copy of this one. */
+	duplicateOf?: ServerProfile;
+}
+
+/** Single-form webview for adding, editing, or duplicating a server. */
 export class ServerFormPanel {
 	private static readonly openPanels = new Map<string, vscode.WebviewPanel>();
 
@@ -63,9 +80,9 @@ export class ServerFormPanel {
 		secrets: SecretsManager,
 		hostKeys: HostKeyStore,
 		onSaved: (profile: ServerProfile) => void,
-		existing?: ServerProfile
+		{ existing, duplicateOf }: ServerFormOptions = {}
 	): Promise<void> {
-		const key = existing?.id ?? '__new__';
+		const key = existing?.id ?? (duplicateOf ? `duplicate:${duplicateOf.id}` : '__new__');
 		const openPanel = ServerFormPanel.openPanels.get(key);
 		if (openPanel) {
 			openPanel.reveal();
@@ -75,7 +92,7 @@ export class ServerFormPanel {
 		const mediaRoot = vscode.Uri.joinPath(context.extensionUri, 'media');
 		const panel = vscode.window.createWebviewPanel(
 			'remoteHostExplorer.serverForm',
-			existing ? `Edit Server: ${existing.name}` : 'Add Server',
+			existing ? `Edit Server: ${existing.name}` : duplicateOf ? `Duplicate Server: ${duplicateOf.name}` : 'Add Server',
 			vscode.ViewColumn.Active,
 			{
 				enableScripts: true,
@@ -98,8 +115,8 @@ export class ServerFormPanel {
 			disposables
 		);
 
-		const panelContext: PanelContext = { context, secrets, hostKeys, existing };
-		panel.webview.html = await renderForm(panel.webview, mediaRoot, existing);
+		const panelContext: PanelContext = { context, secrets, hostKeys, existing, source: existing ?? duplicateOf };
+		panel.webview.html = await renderForm(panel.webview, mediaRoot, existing, duplicateOf);
 
 		panel.webview.onDidReceiveMessage(
 			(message: IncomingMessage) => handleMessage(panel, panelContext, onSaved, message),
@@ -136,7 +153,7 @@ async function handleMessage(
 		}
 
 		case 'browseRemotePath':
-			await handleBrowseRemotePath(panel, panelContext, message.payload);
+			await handleBrowseRemotePath(panel, panelContext, message.payload, message.field);
 			return;
 
 		case 'testConnection':
@@ -173,7 +190,7 @@ function validate(form: SubmittedForm): string | undefined {
 
 async function handleSubmit(
 	panel: vscode.WebviewPanel,
-	{ secrets, existing }: PanelContext,
+	{ secrets, existing, source }: PanelContext,
 	onSaved: (profile: ServerProfile) => void,
 	form: SubmittedForm
 ): Promise<void> {
@@ -187,20 +204,23 @@ async function handleSubmit(
 	// Key and agent authentication only exist for SFTP; FTP always authenticates with a password.
 	const usesKeyAuth = form.protocol === 'sftp' && form.authMethod === 'key';
 	const usesAgent = form.protocol === 'sftp' && form.authMethod === 'agent';
+	const copyFrom = duplicateCredentialSource(existing, source, form);
 
 	if (usesAgent) {
 		// The agent holds the keys; a stored password or passphrase would be a credential nothing uses.
 		await secrets.deleteAll(id);
 	} else if (usesKeyAuth) {
-		if (form.passphrase) {
-			await secrets.setPassphrase(id, form.passphrase);
+		const passphrase = form.passphrase || (copyFrom ? await secrets.getPassphrase(copyFrom.id) : undefined);
+		if (passphrase) {
+			await secrets.setPassphrase(id, passphrase);
 		}
 		// The password no longer applies to this profile; leaving it in SecretStorage keeps a credential
 		// around that nothing can use.
 		await secrets.deletePassword(id);
 	} else {
-		if (form.password) {
-			await secrets.setPassword(id, form.password);
+		const password = form.password || (copyFrom ? await secrets.getPassword(copyFrom.id) : undefined);
+		if (password) {
+			await secrets.setPassword(id, password);
 		}
 		await secrets.deletePassphrase(id);
 	}
@@ -217,6 +237,7 @@ async function handleSubmit(
 		useSshAgent: usesAgent || undefined,
 		remoteRoot: normalizeRemote(form.remoteRoot.trim()) || '/',
 		localPath: form.localPath.trim() || undefined,
+		remoteMappedPath: normalizeRemote(form.remoteMappedPath.trim()) || undefined,
 		autoUpload: form.autoUpload,
 		ignoreGlobs: splitLines(form.ignoreGlobs),
 		useRsyncForUpload: form.protocol === 'sftp' ? form.useRsyncForUpload : false,
@@ -240,21 +261,24 @@ function splitLines(value: string): string[] {
 async function handleBrowseRemotePath(
 	panel: vscode.WebviewPanel,
 	panelContext: PanelContext,
-	form: SubmittedForm
+	form: SubmittedForm,
+	field: 'remoteRoot' | 'remoteMappedPath'
 ): Promise<void> {
 	const problem = validateForConnect(form);
 	if (problem) {
 		panel.webview.postMessage({ type: 'error', message: problem });
 		return;
 	}
+	// The mapped folder usually lives inside the root, so start browsing from whichever is filled in.
+	const startPath = normalizeRemote((field === 'remoteMappedPath' && form.remoteMappedPath.trim()) || form.remoteRoot.trim()) || '/';
 
 	let client: RemoteClient | undefined;
 	try {
 		client = await createClientFromForm(panelContext, form);
 		await client.connect();
-		const selected = await pickRemoteDirectory(client, normalizeRemote(form.remoteRoot.trim()) || '/');
+		const selected = await pickRemoteDirectory(client, startPath);
 		if (selected) {
-			panel.webview.postMessage({ type: 'setField', field: 'remoteRoot', value: selected });
+			panel.webview.postMessage({ type: 'setField', field, value: selected });
 		}
 	} catch (err) {
 		panel.webview.postMessage({ type: 'error', message: `Could not browse remote server: ${(err as Error).message}` });
@@ -295,6 +319,18 @@ function validateForConnect(form: SubmittedForm): string | undefined {
 }
 
 /**
+ * The profile whose saved password/passphrase a new duplicate may take over when those fields are left
+ * blank: the original, and only while the form still targets its endpoint. Editing never copies anything.
+ */
+export function duplicateCredentialSource(
+	existing: ServerProfile | undefined,
+	source: ServerProfile | undefined,
+	form: SubmittedForm
+): ServerProfile | undefined {
+	return !existing && source && targetsSameEndpoint(source, form) ? source : undefined;
+}
+
+/**
  * True when the form still points at the same endpoint, over the same protocol, as the saved profile.
  *
  * Stored credentials are only reused in that case. Otherwise editing the host and pressing "Test
@@ -316,16 +352,16 @@ function targetsSameEndpoint(existing: ServerProfile | undefined, form: Submitte
 }
 
 async function createClientFromForm(
-	{ secrets, hostKeys, existing }: PanelContext,
+	{ secrets, hostKeys, source }: PanelContext,
 	form: SubmittedForm
 ): Promise<RemoteClient> {
-	const mayReuseSecrets = targetsSameEndpoint(existing, form);
+	const mayReuseSecrets = targetsSameEndpoint(source, form);
 	const usesKeyAuth = form.protocol === 'sftp' && form.authMethod === 'key';
 	const usesAgent = form.protocol === 'sftp' && form.authMethod === 'agent';
 
 	const password = usesKeyAuth || usesAgent
 		? undefined
-		: form.password || (mayReuseSecrets && existing ? await secrets.getPassword(existing.id) : undefined);
+		: form.password || (mayReuseSecrets && source ? await secrets.getPassword(source.id) : undefined);
 
 	const host = form.host.trim();
 	const port = form.port.trim() ? Number(form.port) : defaultPortFor(form.protocol);
@@ -339,7 +375,7 @@ async function createClientFromForm(
 	if (form.protocol === 'sftp') {
 		options.privateKeyPath = usesKeyAuth ? form.privateKeyPath.trim() || undefined : undefined;
 		options.passphrase = usesKeyAuth
-			? form.passphrase || (mayReuseSecrets && existing ? await secrets.getPassphrase(existing.id) : undefined)
+			? form.passphrase || (mayReuseSecrets && source ? await secrets.getPassphrase(source.id) : undefined)
 			: undefined;
 		options.agent = usesAgent ? requireSshAgentSocket() : undefined;
 		options.hostKeyPolicy = hostKeys.policyFor(form.name.trim() || host, host, port);
@@ -407,8 +443,10 @@ function toJsonScript(value: unknown): string {
 async function renderForm(
 	webview: vscode.Webview,
 	mediaRoot: vscode.Uri,
-	existing?: ServerProfile
+	existing?: ServerProfile,
+	duplicateOf?: ServerProfile
 ): Promise<string> {
+	const source = existing ?? duplicateOf;
 	const nonce = getNonce();
 	const styleUri = webview.asWebviewUri(vscode.Uri.joinPath(mediaRoot, 'serverForm.css'));
 	const scriptUri = webview.asWebviewUri(vscode.Uri.joinPath(mediaRoot, 'serverForm.js'));
@@ -421,25 +459,28 @@ async function renderForm(
 	const projectAvailable = hasProjectScope();
 	const initialState = {
 		isEdit: Boolean(existing),
+		isDuplicate: Boolean(duplicateOf),
 		protocols: SUPPORTED_PROTOCOLS,
 		defaultPorts: { sftp: defaultPortFor('sftp'), ftp: defaultPortFor('ftp'), ftps: defaultPortFor('ftps') },
 		projectAvailable,
 		values: {
-			name: existing?.name ?? '',
-			protocol: existing?.protocol ?? SUPPORTED_PROTOCOLS[0].value,
+			name: duplicateOf ? `${duplicateOf.name} (copy)` : source?.name ?? '',
+			protocol: source?.protocol ?? SUPPORTED_PROTOCOLS[0].value,
 			// New servers default to the open project so they don't appear in every other window.
-			scope: (existing ? getProfileScope(existing.id) : undefined) ?? (projectAvailable ? 'project' : 'global'),
-			host: existing?.host ?? '',
-			port: existing?.port === undefined ? '' : String(existing.port),
-			username: existing?.username ?? '',
-			authMethod: existing?.useSshAgent ? 'agent' : existing?.privateKeyPath ? 'key' : 'password',
-			privateKeyPath: existing?.privateKeyPath ?? '',
-			remoteRoot: existing?.remoteRoot ?? '/',
-			localPath: existing?.localPath ?? '',
-			autoUpload: existing?.autoUpload ?? false,
-			ignoreGlobs: (existing?.ignoreGlobs ?? DEFAULT_IGNORE_GLOBS).join('\n'),
-			useRsyncForUpload: existing?.useRsyncForUpload ?? false,
-			rsyncOptions: (existing?.rsyncOptions ?? []).join('\n'),
+			scope: (source ? getProfileScope(source.id) : undefined) ?? (projectAvailable ? 'project' : 'global'),
+			host: source?.host ?? '',
+			port: source?.port === undefined ? '' : String(source.port),
+			username: source?.username ?? '',
+			authMethod: source?.useSshAgent ? 'agent' : source?.privateKeyPath ? 'key' : 'password',
+			// Only saved when private key authentication is chosen; password and agent servers drop it.
+			privateKeyPath: source?.privateKeyPath ?? DEFAULT_PRIVATE_KEY_PATH,
+			remoteRoot: source?.remoteRoot ?? '/',
+			localPath: source?.localPath ?? '',
+			remoteMappedPath: source?.remoteMappedPath ?? '',
+			autoUpload: source?.autoUpload ?? false,
+			ignoreGlobs: (source?.ignoreGlobs ?? DEFAULT_IGNORE_GLOBS).join('\n'),
+			useRsyncForUpload: source?.useRsyncForUpload ?? false,
+			rsyncOptions: (source?.rsyncOptions ?? []).join('\n'),
 		},
 	};
 

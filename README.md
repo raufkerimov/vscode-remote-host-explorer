@@ -31,10 +31,13 @@ workflow in the spirit of PhpStorm's Remote Host tool. Works over **SFTP**, **FT
 3. Fill in the form:
    - **Available in** — *This project only* (default) or *All projects*.
    - **Protocol** — SFTP, FTPS, or FTP; then the host, port, and username.
-   - **Authentication** — a password, or for SFTP a private key file or your SSH agent.
+   - **Authentication** — a password, or for SFTP a private key file or your SSH agent. The key path
+     starts as `~/.ssh/id_rsa`; change it if your key has another name, such as `~/.ssh/id_ed25519`.
    - **Remote root path** — the server folder to show. **Browse...** lets you pick it.
    - **Local mapped folder** — optional, but needed for uploading and downloading. Usually your
      project folder.
+   - **Remote mapped folder** — optional; the server folder your local folder matches. Leave it empty
+     when that's the remote root path.
 4. Click **Test Connection**, then **Add Server**.
 5. Click the plug icon next to the server to connect, then expand it to browse.
 
@@ -66,17 +69,33 @@ it matches what your hosting provider or administrator gives you.
   | Delete | `Delete` | `Cmd+Backspace` |
 
 - **Create Backup** makes a timestamped copy next to the file, such as `index_2026-09-13_142501.php`.
+- **Duplicate Server...** on a server opens the form pre-filled with a copy, so you can add the same
+  server with different folders. Leave the password blank to reuse the original's; it is only reused
+  while the protocol, host, port, and username stay the same.
 
 ## Uploading and downloading
 
 Uploading and downloading need a **Local mapped folder** on the server. It links a folder on your
 computer to the server's remote root, so `my-project/app/index.php` maps to `/var/www/app/index.php`.
 
+To browse more of the server than you map, set a **Remote mapped folder** as well. For example, to see
+a whole WordPress install but work only on your theme:
+
+| Field | Value |
+| --- | --- |
+| Remote root path | `/var/www/site` |
+| Local mapped folder | `~/projects/my-theme` |
+| Remote mapped folder | `/var/www/site/wp-content/themes/my-theme` |
+
+The Remote Hosts view then shows all of `/var/www/site`, while uploads, downloads, Compare, and upload
+on save use only the theme folder. Download and Compare are greyed out for items outside it.
+
 - **Upload**: right-click files or folders in the Explorer and choose **Upload to Remote Host**, or use
   the cloud icon in the editor title bar (shown for files inside a mapped folder).
 - **Upload on save**: turn on **Auto-upload on save** for the server.
 - **Download**: right-click items in the Remote Hosts view, or files in the Explorer, and choose
-  **Download to Local**. For servers without a local folder, this action is greyed out.
+  **Download to Local**. For servers without a local folder, or items outside the remote mapped folder,
+  this action is greyed out.
 - **Existing local files are never replaced silently.** If a download would overwrite a file on your
   computer, you choose **Overwrite**, **Skip**, or apply either to all remaining files. For a folder,
   all of these questions come first, before any file is transferred.
@@ -184,10 +203,11 @@ you type. Each server needs a unique `id`, which its saved password is linked to
 | `protocol` | `sftp`, `ftps`, or `ftp`. |
 | `host`, `port` | Server address. The port defaults to `22` for SFTP and `21` for FTP and FTPS. |
 | `username` | Login name. |
-| `privateKeyPath` | SFTP only. Path to a private key file; when set, key authentication is used. |
+| `privateKeyPath` | SFTP only. Path to a private key file; when set, key authentication is used. `~` is your home folder. |
 | `useSshAgent` | SFTP only. Authenticate with the keys loaded in your SSH agent. |
 | `remoteRoot` | Server folder shown as the root. |
-| `localPath` | Local folder linked to `remoteRoot`. Needed for uploads and downloads. |
+| `localPath` | Local folder linked to `remoteMappedPath` (or `remoteRoot`). Needed for uploads and downloads. |
+| `remoteMappedPath` | Server folder that `localPath` matches. Defaults to `remoteRoot`. |
 | `autoUpload` | Upload files in `localPath` when you save them. |
 | `ignoreGlobs` | Patterns to skip. If omitted, the defaults above apply. Use `[]` to skip nothing. |
 | `useRsyncForUpload` | SFTP only. Upload with `rsync` over SSH. |
@@ -236,7 +256,8 @@ Authentication Agent** service. Or switch the server to private key authenticati
 Check that the path in **Private key path** exists and that your user can read the file.
 
 **"Download to Local" is greyed out.**
-The server has no local folder. Edit the server and set **Local mapped folder**.
+The server has no local folder, or the item is outside its **Remote mapped folder**. Edit the server
+and set **Local mapped folder** (and **Remote mapped folder**, if needed).
 
 **The upload icon isn't in the editor title bar.**
 It appears only for files inside a server's local mapped folder.

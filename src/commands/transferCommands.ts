@@ -1,24 +1,12 @@
-import * as path from 'path';
 import * as vscode from 'vscode';
-import { isIgnored, resolveServerForLocalPath, type ServerProfile } from '../config/serverConfig';
+import { isIgnored, localPathForRemote, resolveServerForLocalPath } from '../config/serverConfig';
 import { downloadPath, uploadPath, withTransferProgress, type TransferSummary } from '../remote/transfer';
 import { withoutNestedSelections, type FileNode, type TreeNode } from '../tree/RemoteTreeProvider';
-import { dirnameRemote, normalizeRemote, toSafeRelativePath } from '../util/remotePath';
+import { dirnameRemote } from '../util/remotePath';
 import { guarded, resolveSelection, type CommandServices } from './shared';
 
 const NO_MAPPING_MESSAGE =
 	'No server mapping found for this file. Add a "Local mapped folder" to a server profile first.';
-
-/** Local counterpart of a remote path, derived from the server's path mapping. */
-export function localTargetFor(server: ServerProfile, remotePath: string): string | undefined {
-	if (!server.localPath) {
-		return undefined;
-	}
-	const root = normalizeRemote(server.remoteRoot);
-	const normalized = normalizeRemote(remotePath);
-	const relative = normalized === root ? '' : normalized.slice(root === '/' ? 1 : root.length + 1);
-	return relative ? path.join(server.localPath, toSafeRelativePath(relative)) : server.localPath;
-}
 
 /** Explorer/editor targets: all selected Explorer items, or the active editor when invoked elsewhere. */
 function localTargets(clicked?: vscode.Uri, selected?: vscode.Uri[]): vscode.Uri[] {
@@ -128,24 +116,23 @@ export function registerTransferCommands(services: CommandServices): vscode.Disp
 				const nodes = withoutNestedSelections(
 					resolveSelection(clicked, selected, treeView.selection).filter((node): node is FileNode => node.kind === 'file')
 				);
-				const mapped = nodes.filter(node => node.server.localPath);
+				const mapped = nodes.flatMap(node => {
+					const localTarget = localPathForRemote(node.server, node.entry.path);
+					return localTarget ? [{ node, localTarget }] : [];
+				});
 				const unmapped = nodes.length - mapped.length;
 
 				if (mapped.length === 0) {
 					if (nodes.length > 0) {
 						vscode.window.showWarningMessage(
-							'Set a "Local mapped folder" on this server to download items from the tree.'
+							'Only items inside the server\'s remote mapped folder can be downloaded. Set a "Local mapped folder" on the server first.'
 						);
 					}
 					return;
 				}
 
 				const summary = await withTransferProgress(`Downloading ${mapped.length} item(s)`, async run => {
-					for (const node of mapped) {
-						const localTarget = localTargetFor(node.server, node.entry.path);
-						if (!localTarget) {
-							continue;
-						}
+					for (const { node, localTarget } of mapped) {
 						const client = await connections.getClient(node.server);
 						await downloadPath(node.server, client, node.entry.path, localTarget, node.entry.isDirectory, run);
 					}

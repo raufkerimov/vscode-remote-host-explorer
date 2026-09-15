@@ -1,6 +1,7 @@
 import { spawn } from 'child_process';
 import type * as vscode from 'vscode';
 import type { ServerProfile } from '../config/serverConfig';
+import { expandHome } from '../util/localPath';
 
 export interface RsyncUploadOptions {
 	localPath: string;
@@ -38,7 +39,8 @@ export function buildRsyncArgs(server: ServerProfile, options: RsyncUploadOption
 		sshCommand.push('-p', String(server.port));
 	}
 	if (server.privateKeyPath) {
-		sshCommand.push('-i', shellQuote(server.privateKeyPath));
+		// Quoting stops the shell-less `-e` parsing from expanding `~`, so expand it here.
+		sshCommand.push('-i', shellQuote(expandHome(server.privateKeyPath)));
 	}
 	// Never let ssh block on an interactive prompt: rsync runs detached from any terminal, so a host-key
 	// or password prompt would hang the transfer forever instead of failing.

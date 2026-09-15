@@ -3,6 +3,17 @@
 All notable changes to Remote Host Explorer are documented here.
 This project follows [Semantic Versioning](https://semver.org/).
 
+## [0.1.5] - 2026-09-15
+
+- **Remote mapped folder**: map your local folder to a folder inside the one you browse, for example to
+  see a whole WordPress install while uploading and downloading only your theme.
+- The private key path now starts as `~/.ssh/id_rsa`, and `~` works in key paths, so a shared
+  `remote-hosts.json` points at each person's own key.
+- **Duplicate Server...** creates a copy of a server to change, for example the same server with
+  different folders. The saved password is reused while the host and login stay the same.
+- The Add/Edit Server form uses two columns, connection details and folders side by side, so it fits
+  without scrolling. Narrow editors still show one column.
+
 ## [0.1.4] - 2026-09-15
 
 - **New Folder...** in the Remote Hosts view.

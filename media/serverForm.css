@@ -2,7 +2,37 @@ body {
 	font-family: var(--vscode-font-family);
 	padding: 16px;
 	color: var(--vscode-foreground);
-	max-width: 520px;
+	max-width: 1080px;
+}
+
+/* Connection details on the left, folders and upload options on the right, so the form fits without
+   scrolling on a normal editor. Narrow editors fall back to one column. */
+.columns {
+	display: grid;
+	grid-template-columns: repeat(2, minmax(0, 1fr));
+	gap: 0 32px;
+	align-items: start;
+}
+
+@media (max-width: 760px) {
+	.columns {
+		grid-template-columns: minmax(0, 1fr);
+	}
+
+	.column + .column h3 {
+		margin-top: 24px;
+	}
+}
+
+.column h3 {
+	margin: 8px 0 0;
+	padding-bottom: 4px;
+	font-size: 0.85em;
+	font-weight: 600;
+	text-transform: uppercase;
+	letter-spacing: 0.04em;
+	opacity: 0.8;
+	border-bottom: 1px solid var(--vscode-widget-border, var(--vscode-input-border, transparent));
 }
 
 label {
@@ -34,6 +64,10 @@ textarea {
 textarea {
 	min-height: 60px;
 	font-family: var(--vscode-editor-font-family);
+}
+
+#ignoreGlobs {
+	min-height: 140px;
 }
 
 .row {

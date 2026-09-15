@@ -42,7 +42,24 @@ export function registerServerCommands(services: CommandServices): vscode.Dispos
 					secrets,
 					hostKeys,
 					profile => void handleServerSaved(services, profile),
-					server
+					{ existing: server }
+				);
+			})
+		),
+
+		vscode.commands.registerCommand(
+			'remoteHostExplorer.duplicateServer',
+			guarded('Failed to open the server form', async (node?: { server: ServerProfile }) => {
+				const server = node?.server ?? (await pickServer());
+				if (!server) {
+					return;
+				}
+				await ServerFormPanel.show(
+					context,
+					secrets,
+					hostKeys,
+					profile => void handleServerSaved(services, profile),
+					{ duplicateOf: server }
 				);
 			})
 		),

@@ -1,11 +1,10 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import * as vscode from 'vscode';
-import { getServerProfile, resolveServerForLocalPath, type ServerProfile } from '../config/serverConfig';
+import { getServerProfile, localPathForRemote, resolveServerForLocalPath, type ServerProfile } from '../config/serverConfig';
 import type { TreeNode } from '../tree/RemoteTreeProvider';
 import { basenameRemote } from '../util/remotePath';
 import { guarded, type CommandServices } from './shared';
-import { localTargetFor } from './transferCommands';
 
 /** Scheme of the read-only documents that show a server's copy of a file in a diff. */
 export const REMOTE_DOCUMENT_SCHEME = 'remotehostexplorer-remote';
@@ -94,9 +93,11 @@ export function registerCompareCommands(services: CommandServices): vscode.Dispo
 				if (node?.kind !== 'file' || node.entry.isDirectory) {
 					return;
 				}
-				const localPath = localTargetFor(node.server, node.entry.path);
+				const localPath = localPathForRemote(node.server, node.entry.path);
 				if (!localPath) {
-					vscode.window.showWarningMessage('Set a "Local mapped folder" on this server to compare with local files.');
+					vscode.window.showWarningMessage(
+						'Only files inside the server\'s remote mapped folder can be compared. Set a "Local mapped folder" on the server first.'
+					);
 					return;
 				}
 				if (!(await localFileExists(localPath))) {

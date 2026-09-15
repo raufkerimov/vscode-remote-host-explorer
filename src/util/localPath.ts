@@ -1,7 +1,19 @@
+import * as os from 'os';
 import * as path from 'path';
 
 /** macOS and Windows compare paths case-insensitively; Linux does not. */
 const CASE_INSENSITIVE_PATHS = process.platform === 'win32' || process.platform === 'darwin';
+
+/**
+ * Expands a leading `~` to the home folder, as a shell would. Profiles can then say `~/.ssh/id_rsa` and
+ * work for everyone who shares the file, whatever their user name.
+ */
+export function expandHome(fsPath: string, home: string = os.homedir()): string {
+	if (fsPath === '~') {
+		return home;
+	}
+	return /^~[/\\]/.test(fsPath) ? path.join(home, fsPath.slice(2)) : fsPath;
+}
 
 /** Absolute path without a trailing separator. */
 export function normalizeLocal(fsPath: string): string {

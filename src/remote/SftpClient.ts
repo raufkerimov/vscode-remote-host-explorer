@@ -8,6 +8,7 @@ import {
 	type RemoteConnectionOptions,
 	type RemoteFileEntry,
 } from './RemoteClient';
+import { expandHome } from '../util/localPath';
 import { joinRemote, normalizeRemote } from '../util/remotePath';
 
 /** Keeps idle sessions alive through NAT/firewall timeouts instead of failing on the next operation. */
@@ -50,7 +51,7 @@ export class SftpRemoteClient implements RemoteClient {
 		}
 		try {
 			// Read asynchronously: a synchronous read here blocks the entire Extension Host.
-			return await fs.promises.readFile(this.options.privateKeyPath);
+			return await fs.promises.readFile(expandHome(this.options.privateKeyPath));
 		} catch (err) {
 			throw new Error(
 				`Could not read the private key at "${this.options.privateKeyPath}": ${(err as Error).message}`

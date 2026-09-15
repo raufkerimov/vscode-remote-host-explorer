@@ -3,7 +3,7 @@
   "displayName": "Remote Host Explorer",
   "description": "A fast and lightweight PhpStorm-style Remote Host manager for VS Code. Features a friendly GUI for server configuration, background upload-on-save, and direct remote file management over SFTP, FTPS, and FTP.",
   "icon": "media/icon.png",
-  "version": "0.1.4",
+  "version": "0.1.5",
   "license": "MIT",
   "publisher": "raufkerimov",
   "author": {
@@ -80,6 +80,12 @@
         "title": "Edit Server...",
         "category": "Remote Host Explorer",
         "icon": "$(pencil)"
+      },
+      {
+        "command": "remoteHostExplorer.duplicateServer",
+        "title": "Duplicate Server...",
+        "category": "Remote Host Explorer",
+        "icon": "$(copy)"
       },
       {
         "command": "remoteHostExplorer.removeServer",
@@ -339,9 +345,14 @@
           "group": "2_modification@1"
         },
         {
-          "command": "remoteHostExplorer.removeServer",
+          "command": "remoteHostExplorer.duplicateServer",
           "when": "view == remoteHostExplorer.servers && viewItem =~ /^remoteHostExplorer\\.server\\./",
           "group": "2_modification@2"
+        },
+        {
+          "command": "remoteHostExplorer.removeServer",
+          "when": "view == remoteHostExplorer.servers && viewItem =~ /^remoteHostExplorer\\.server\\./",
+          "group": "2_modification@3"
         },
         {
           "command": "remoteHostExplorer.openRemoteFile",
@@ -495,7 +506,7 @@
               },
               "privateKeyPath": {
                 "type": "string",
-                "description": "Path to an SSH private key. Setting this selects key authentication."
+                "description": "Path to an SSH private key. Setting this selects key authentication. A leading ~ means your home folder, e.g. ~/.ssh/id_rsa."
               },
               "useSshAgent": {
                 "type": "boolean",
@@ -504,11 +515,15 @@
               },
               "remoteRoot": {
                 "type": "string",
-                "description": "Root path on the remote server to browse."
+                "description": "Root path on the remote server shown in the Remote Hosts view."
               },
               "localPath": {
                 "type": "string",
-                "description": "Local folder mapped to remoteRoot for upload/download resolution."
+                "description": "Local folder mapped to remoteMappedPath (or remoteRoot when that is not set) for upload/download resolution."
+              },
+              "remoteMappedPath": {
+                "type": "string",
+                "description": "Server folder that localPath corresponds to. Defaults to remoteRoot. Set it to browse a larger folder while mapping only part of it, for example a whole WordPress install with only the theme mapped."
               },
               "autoUpload": {
                 "type": "boolean",

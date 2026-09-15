@@ -76,7 +76,7 @@ remote-host-explorer/
 │   ├── extension.ts          # Activation only: wiring, context keys, save listener
 │   ├── commands/
 │   │   ├── shared.ts         # CommandServices, clipboard, `resolveSelection`, `guarded()`, server picker
-│   │   ├── serverCommands.ts # add/edit/remove/test/connect/disconnect
+│   │   ├── serverCommands.ts # add/edit/duplicate/remove/test/connect/disconnect/SSH terminal
 │   │   ├── fileCommands.ts   # open/new file+folder/rename/delete/copy/cut/paste/backup/copy-path
 │   │   ├── compareCommands.ts # Compare with Remote/Local via a read-only content provider
 │   │   └── transferCommands.ts # upload/download (tree + Explorer, multi-select) + auto-upload-on-save
@@ -148,6 +148,8 @@ remote-host-explorer/
 - Stored credentials are only reused for a form-initiated connection when the form still targets the
   same protocol/host/port/username (`targetsSameEndpoint`). Do not relax this: it is what stops a
   typed-in host from receiving the saved password, and stops an SFTP password being sent over plain FTP.
+  Duplicating a server follows the same rule: blank credential fields copy the original's secrets only
+  while `duplicateCredentialSource` (same endpoint) allows it.
 - Profiles have a scope: `project` (`.vscode/remote-hosts.json` in a workspace folder) or `global`
   (the `remoteHostExplorer.servers` **user** setting). Read with `getScopedServerProfiles()` and write
   with `upsertServerProfile(profile, scope)` / `removeServerProfile(id)`, which move a profile between
@@ -234,6 +236,10 @@ remote-host-explorer/
   for SFTP, 1 for FTP. Never prompt from inside the parallel phase; concurrent modals would interleave.
 - Tree drops accept `text/uri-list` (file manager / Explorer) and upload through `uploadPath`, asking
   `promptForConflict` before replacing an existing remote item.
+- The mapping pairs `localPath` with `remoteMappedPath`, which defaults to `remoteRoot` (the browsed
+  folder). Never map against `remoteRoot` directly: use `mappedRemoteRoot(server)`, `localPathForRemote`
+  (remote → local, `undefined` outside the mapped folder) and `resolveServerForLocalPath` (local → remote).
+  A row is `.mapped` only when `localPathForRemote` resolves it.
 - `ignoreGlobs` are evaluated relative to the profile's `localPath` and apply to auto-upload and
   recursive transfers, not to an explicitly requested single-file upload.
 - `DEFAULT_IGNORE_GLOBS` in `config/serverConfig.ts` is the single source of the defaults (the form and

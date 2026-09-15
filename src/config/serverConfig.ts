@@ -1,7 +1,8 @@
 import * as vscode from 'vscode';
 import { matchesAnyGlob } from '../util/glob';
 import { isSameOrInside, normalizeLocal } from '../util/localPath';
-import { joinRemote, normalizeRemote } from '../util/remotePath';
+import * as path from 'path';
+import { isSameOrInside as isRemoteSameOrInside, joinRemote, normalizeRemote, toSafeRelativePath } from '../util/remotePath';
 import { folderIndexForLocalPath, ProjectServerStore } from './projectServerFile';
 
 /** `ftps` is explicit TLS (AUTH TLS on the normal FTP port). */
@@ -14,16 +15,46 @@ export interface ServerProfile {
 	host: string;
 	port?: number;
 	username?: string;
+	/** SFTP only. A leading `~` means the home folder. */
 	privateKeyPath?: string;
 	/** SFTP only: authenticate with the keys loaded in the running ssh-agent (the OpenSSH agent on Windows). */
 	useSshAgent?: boolean;
+	/** Folder the tree shows. */
 	remoteRoot: string;
 	localPath?: string;
+	/**
+	 * Server folder that `localPath` corresponds to. Defaults to `remoteRoot`; set it to browse a larger
+	 * tree (a whole WordPress install) while mapping only part of it (one theme).
+	 */
+	remoteMappedPath?: string;
 	autoUpload?: boolean;
 	ignoreGlobs?: string[];
 	/** SFTP only: upload via `rsync` over ssh instead of SFTP put (faster for large/many files). */
 	useRsyncForUpload?: boolean;
 	rsyncOptions?: string[];
+}
+
+/** The server folder the local folder maps to. */
+export function mappedRemoteRoot(server: ServerProfile): string {
+	return normalizeRemote(server.remoteMappedPath || server.remoteRoot) || '/';
+}
+
+/**
+ * Local counterpart of a remote path, or `undefined` when the server has no local folder or the path is
+ * outside the remote mapped folder. Pure so it can be unit tested.
+ */
+export function localPathForRemote(server: ServerProfile, remotePath: string): string | undefined {
+	if (!server.localPath) {
+		return undefined;
+	}
+	const root = mappedRemoteRoot(server);
+	const target = normalizeRemote(remotePath);
+	if (!isRemoteSameOrInside(root, target)) {
+		return undefined;
+	}
+	const relative = target === root ? '' : target.slice(root === '/' ? 1 : root.length + 1);
+	// Remote names come from the server and are never trusted as local path components.
+	return relative ? path.join(server.localPath, toSafeRelativePath(relative)) : server.localPath;
 }
 
 export interface LocalPathResolution {
@@ -33,6 +64,9 @@ export interface LocalPathResolution {
 	/** POSIX path relative to the mapping root; `''` when the file *is* the root. */
 	relativePath: string;
 }
+
+/** Key path the server form suggests when private key authentication is chosen. */
+export const DEFAULT_PRIVATE_KEY_PATH = '~/.ssh/id_rsa';
 
 const CONFIG_SECTION = 'remoteHostExplorer';
 /** Version 0.1.0 saved servers under this name. */
@@ -296,7 +330,8 @@ export function resolveServerForLocalPathIn(
 	}
 
 	const relativePath = target.slice(bestRoot.length).replace(/\\/g, '/').replace(/^\/+/, '');
-	const remotePath = relativePath ? joinRemote(best.remoteRoot, relativePath) : normalizeRemote(best.remoteRoot);
+	const remoteRoot = mappedRemoteRoot(best);
+	const remotePath = relativePath ? joinRemote(remoteRoot, relativePath) : remoteRoot;
 	return { server: best, remotePath, relativePath };
 }
 

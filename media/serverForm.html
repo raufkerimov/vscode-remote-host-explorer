@@ -8,96 +8,112 @@
 <body>
 	<h2 id="heading">Add Server</h2>
 
-	<label>Name<input type="text" id="name"></label>
+	<div class="columns">
+		<section class="column">
+			<h3>Connection</h3>
 
-	<label>Available in
-		<select id="scope">
-			<option value="project">This project only</option>
-			<option value="global">All projects</option>
-		</select>
-		<span class="hint" id="scope-hint"></span>
-	</label>
+			<label>Name<input type="text" id="name"></label>
 
-	<div class="row">
-		<div>
-			<label>Protocol
-				<select id="protocol"></select>
+			<label>Available in
+				<select id="scope">
+					<option value="project">This project only</option>
+					<option value="global">All projects</option>
+				</select>
+				<span class="hint" id="scope-hint"></span>
 			</label>
-		</div>
-		<div>
-			<label>Port <span class="hint" id="port-hint">(optional)</span>
-				<input type="number" id="port" min="1" max="65535">
-			</label>
-		</div>
-	</div>
 
-	<div class="warning" id="insecure-warning">
-		Plain FTP sends your password and files unencrypted. Prefer SFTP or FTPS when the server supports them.
-	</div>
-
-	<label>Host<input type="text" id="host" placeholder="example.com"></label>
-	<label>Username <span class="hint">(optional)</span><input type="text" id="username"></label>
-
-	<label id="auth-method-row">Authentication
-		<select id="authMethod">
-			<option value="password">Password</option>
-			<option value="key">Private key</option>
-			<option value="agent">SSH agent</option>
-		</select>
-	</label>
-	<div id="auth-password" class="auth-section">
-		<label>Password <span class="hint" id="password-hint"></span>
-			<input type="password" id="password" autocomplete="off">
-		</label>
-	</div>
-	<div id="auth-key" class="auth-section">
-		<label>Private key path
-			<div class="path-row">
-				<input type="text" id="privateKeyPath">
-				<button type="button" id="browsePrivateKey" class="secondary">Browse...</button>
+			<div class="row">
+				<div>
+					<label>Protocol
+						<select id="protocol"></select>
+					</label>
+				</div>
+				<div>
+					<label>Port <span class="hint" id="port-hint">(optional)</span>
+						<input type="number" id="port" min="1" max="65535">
+					</label>
+				</div>
 			</div>
-		</label>
-		<label>Key passphrase <span class="hint" id="passphrase-hint"></span>
-			<input type="password" id="passphrase" autocomplete="off">
-		</label>
+
+			<div class="warning" id="insecure-warning">
+				Plain FTP sends your password and files unencrypted. Prefer SFTP or FTPS when the server supports them.
+			</div>
+
+			<label>Host<input type="text" id="host" placeholder="example.com"></label>
+			<label>Username <span class="hint">(optional)</span><input type="text" id="username"></label>
+
+			<label id="auth-method-row">Authentication
+				<select id="authMethod">
+					<option value="password">Password</option>
+					<option value="key">Private key</option>
+					<option value="agent">SSH agent</option>
+				</select>
+			</label>
+			<div id="auth-password" class="auth-section">
+				<label>Password <span class="hint" id="password-hint"></span>
+					<input type="password" id="password" autocomplete="off">
+				</label>
+			</div>
+			<div id="auth-key" class="auth-section">
+				<label>Private key path <span class="hint">(~ is your home folder)</span>
+					<div class="path-row">
+						<input type="text" id="privateKeyPath" placeholder="~/.ssh/id_rsa">
+						<button type="button" id="browsePrivateKey" class="secondary">Browse...</button>
+					</div>
+				</label>
+				<label>Key passphrase <span class="hint" id="passphrase-hint"></span>
+					<input type="password" id="passphrase" autocomplete="off">
+				</label>
+			</div>
+
+			<div id="auth-agent" class="auth-section">
+				<p class="hint">Uses the keys loaded in your running SSH agent (ssh-agent, or the OpenSSH
+					Authentication Agent on Windows). No password or key is saved for this server.</p>
+			</div>
+		</section>
+
+		<section class="column">
+			<h3>Folders and uploads</h3>
+
+			<label>Remote root path <span class="hint">(the folder shown in the Remote Hosts view)</span>
+				<div class="path-row">
+					<input type="text" id="remoteRoot">
+					<button type="button" id="browseRemoteRoot" class="secondary">Browse...</button>
+				</div>
+			</label>
+			<label>Local mapped folder <span class="hint">(optional; enables upload/download/auto-upload)</span>
+				<div class="path-row">
+					<input type="text" id="localPath">
+					<button type="button" id="browseLocalPath" class="secondary">Browse...</button>
+				</div>
+			</label>
+			<label>Remote mapped folder <span class="hint">(optional; defaults to the remote root path)</span>
+				<div class="path-row">
+					<input type="text" id="remoteMappedPath" placeholder="Same as remote root path">
+					<button type="button" id="browseRemoteMappedPath" class="secondary">Browse...</button>
+				</div>
+			</label>
+
+			<div class="checkbox-row">
+				<input type="checkbox" id="autoUpload">
+				<label for="autoUpload">Auto-upload on save</label>
+			</div>
+
+			<div id="rsync-section" class="auth-section">
+				<div class="checkbox-row">
+					<input type="checkbox" id="useRsyncForUpload">
+					<label for="useRsyncForUpload">Use rsync (over ssh) for uploads instead of SFTP put</label>
+				</div>
+				<label>Extra rsync flags <span class="hint">(one per line, requires local rsync/ssh binaries)</span>
+					<textarea id="rsyncOptions"></textarea>
+				</label>
+			</div>
+
+			<label>Ignore patterns <span class="hint">(one glob per line; supports *, ?, and **)</span>
+				<textarea id="ignoreGlobs"></textarea>
+			</label>
+		</section>
 	</div>
-
-	<div id="auth-agent" class="auth-section">
-		<p class="hint">Uses the keys loaded in your running SSH agent (ssh-agent, or the OpenSSH
-			Authentication Agent on Windows). No password or key is saved for this server.</p>
-	</div>
-
-	<label>Remote root path
-		<div class="path-row">
-			<input type="text" id="remoteRoot">
-			<button type="button" id="browseRemoteRoot" class="secondary">Browse...</button>
-		</div>
-	</label>
-	<label>Local mapped folder <span class="hint">(optional; enables upload/download/auto-upload)</span>
-		<div class="path-row">
-			<input type="text" id="localPath">
-			<button type="button" id="browseLocalPath" class="secondary">Browse...</button>
-		</div>
-	</label>
-
-	<div class="checkbox-row">
-		<input type="checkbox" id="autoUpload">
-		<label for="autoUpload">Auto-upload on save</label>
-	</div>
-
-	<div id="rsync-section" class="auth-section">
-		<div class="checkbox-row">
-			<input type="checkbox" id="useRsyncForUpload">
-			<label for="useRsyncForUpload">Use rsync (over ssh) for uploads instead of SFTP put</label>
-		</div>
-		<label>Extra rsync flags <span class="hint">(one per line, requires local rsync/ssh binaries)</span>
-			<textarea id="rsyncOptions"></textarea>
-		</label>
-	</div>
-
-	<label>Ignore patterns <span class="hint">(one glob per line; supports *, ?, and **)</span>
-		<textarea id="ignoreGlobs"></textarea>
-	</label>
 
 	<div class="error" id="error"></div>
 	<div class="status" id="status"></div>

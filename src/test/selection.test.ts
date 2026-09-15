@@ -67,6 +67,13 @@ suite('fileContextValue', () => {
 		assert.strictEqual(fileContextValue(entry('/dir', true), mapped), 'remoteHostExplorer.directory.sftp.mapped');
 	});
 
+	test('only rows inside the remote mapped folder count as mapped', () => {
+		const theme = { ...base, remoteRoot: '/site', localPath: '/projects/theme', remoteMappedPath: '/site/wp-content/themes/t' };
+		assert.strictEqual(fileContextValue(entry('/site/wp-config.php'), theme), 'remoteHostExplorer.file.sftp.unmapped');
+		assert.strictEqual(fileContextValue(entry('/site/wp-content', true), theme), 'remoteHostExplorer.directory.sftp.unmapped');
+		assert.strictEqual(fileContextValue(entry('/site/wp-content/themes/t/style.css'), theme), 'remoteHostExplorer.file.sftp.mapped');
+	});
+
 	test('matches the enablement and menu patterns declared in package.json', () => {
 		const manifest = require('../../package.json');
 		const download = manifest.contributes.commands.find(
