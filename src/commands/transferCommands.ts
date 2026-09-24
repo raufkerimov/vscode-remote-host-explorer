@@ -1,14 +1,15 @@
+import * as path from 'path';
 import * as vscode from 'vscode';
 import { isIgnored, localPathForRemote, resolveServerForLocalPath } from '../config/serverConfig';
 import { downloadPath, uploadPath, withTransferProgress, type TransferSummary } from '../remote/transfer';
 import { withoutNestedSelections, type FileNode, type TreeNode } from '../tree/RemoteTreeProvider';
-import { dirnameRemote } from '../util/remotePath';
+import { dirnameRemote, toSafeRelativePath } from '../util/remotePath';
 import { guarded, resolveSelection, type CommandServices } from './shared';
 
 const NO_MAPPING_MESSAGE =
-	'No server mapping found for this file. Add a "Local mapped folder" to a server profile first.';
+	'No server mapping found for this file. Add a folder mapping to a server profile first.';
 
-/** Explorer/editor targets: all selected Explorer items, or the active editor when invoked elsewhere. */
+/** All selected Explorer items, or the active editor when invoked without an Explorer item. */
 function localTargets(clicked?: vscode.Uri, selected?: vscode.Uri[]): vscode.Uri[] {
 	if (clicked instanceof vscode.Uri) {
 		return selected && selected.length > 0 && selected.some(uri => uri.toString() === clicked.toString())
@@ -27,17 +28,17 @@ function withMappings(targets: readonly vscode.Uri[]) {
 	});
 }
 
-function summarize(verb: string, summary: TransferSummary, unmapped: number): string {
+function summarize(verb: string, summary: TransferSummary, unmapped: number, destination = ''): string {
 	const extras = [
 		summary.skipped ? `${summary.skipped} ignored` : '',
 		summary.keptLocal ? `${summary.keptLocal} existing local file(s) kept` : '',
 		unmapped ? `${unmapped} without a local folder mapping` : '',
 	].filter(Boolean);
-	return `${verb} ${summary.transferred} item(s)${extras.length ? ` (${extras.join(', ')})` : ''}.`;
+	return `${verb} ${summary.transferred} item(s)${destination}${extras.length ? ` (${extras.join(', ')})` : ''}.`;
 }
 
 export function registerTransferCommands(services: CommandServices): vscode.Disposable[] {
-	const { connections, outputChannel, treeProvider, treeView } = services;
+	const { context, connections, outputChannel, treeProvider, treeView } = services;
 
 	return [
 		vscode.commands.registerCommand(
@@ -71,51 +72,11 @@ export function registerTransferCommands(services: CommandServices): vscode.Disp
 			})
 		),
 
-		// Explorer / editor: download the remote counterpart of local files.
-		vscode.commands.registerCommand(
-			'remoteHostExplorer.downloadFile',
-			guarded('Download failed', async (clicked?: vscode.Uri, selected?: vscode.Uri[]) => {
-				const targets = localTargets(clicked, selected);
-				const resolved = withMappings(targets);
-				const unmapped = targets.length - resolved.length;
-
-				if (resolved.length === 0) {
-					if (targets.length > 0) {
-						vscode.window.showWarningMessage(NO_MAPPING_MESSAGE);
-					}
-					return;
-				}
-
-				const missing: string[] = [];
-				const summary = await withTransferProgress(`Downloading ${resolved.length} item(s)`, async run => {
-					for (const { uri, resolution } of resolved) {
-						const client = await connections.getClient(resolution.server);
-						const remoteInfo = await client.stat(resolution.remotePath);
-						if (!remoteInfo) {
-							missing.push(resolution.remotePath);
-							continue;
-						}
-						await downloadPath(resolution.server, client, resolution.remotePath, uri.fsPath, remoteInfo.isDirectory, run);
-					}
-				});
-				if (!summary) {
-					vscode.window.showInformationMessage('Download cancelled.');
-					return;
-				}
-				if (missing.length > 0) {
-					vscode.window.showWarningMessage(`Not found on the server: ${missing.join(', ')}`);
-				}
-				vscode.window.showInformationMessage(summarize('Downloaded', summary, unmapped));
-			})
-		),
-
 		// Remote Hosts tree: download selected remote items into the server's local folder mapping.
 		vscode.commands.registerCommand(
 			'remoteHostExplorer.downloadRemoteItem',
 			guarded('Download failed', async (clicked?: TreeNode, selected?: TreeNode[]) => {
-				const nodes = withoutNestedSelections(
-					resolveSelection(clicked, selected, treeView.selection).filter((node): node is FileNode => node.kind === 'file')
-				);
+				const nodes = selectedFileNodes(clicked, selected);
 				const mapped = nodes.flatMap(node => {
 					const localTarget = localPathForRemote(node.server, node.entry.path);
 					return localTarget ? [{ node, localTarget }] : [];
@@ -125,7 +86,7 @@ export function registerTransferCommands(services: CommandServices): vscode.Disp
 				if (mapped.length === 0) {
 					if (nodes.length > 0) {
 						vscode.window.showWarningMessage(
-							'Only items inside the server\'s remote mapped folder can be downloaded. Set a "Local mapped folder" on the server first.'
+							'Only items inside one of the server\'s folder mappings can be downloaded to it. Use "Download to Folder..." to save them anywhere else.'
 						);
 					}
 					return;
@@ -144,7 +105,72 @@ export function registerTransferCommands(services: CommandServices): vscode.Disp
 				vscode.window.showInformationMessage(summarize('Downloaded', summary, unmapped));
 			})
 		),
+
+		// Remote Hosts tree: download selected remote items into any folder, mapped or not.
+		vscode.commands.registerCommand(
+			'remoteHostExplorer.downloadRemoteItemTo',
+			guarded('Download failed', async (clicked?: TreeNode, selected?: TreeNode[]) => {
+				const nodes = selectedFileNodes(clicked, selected);
+				if (nodes.length === 0) {
+					return;
+				}
+				const folder = await pickDownloadFolder(context, nodes.length);
+				if (!folder) {
+					return;
+				}
+
+				const summary = await withTransferProgress(`Downloading ${nodes.length} item(s)`, async run => {
+					for (const node of nodes) {
+						// Entry names come from the server and are never trusted as path components.
+						const name = toSafeRelativePath(node.entry.name);
+						if (!name) {
+							run.summary.skipped += 1;
+							continue;
+						}
+						const client = await connections.getClient(node.server);
+						await downloadPath(node.server, client, node.entry.path, path.join(folder, name), node.entry.isDirectory, run);
+					}
+				});
+				if (!summary) {
+					vscode.window.showInformationMessage('Download cancelled.');
+					return;
+				}
+				vscode.window.showInformationMessage(summarize('Downloaded', summary, 0, ` to ${folder}`));
+			})
+		),
 	];
+
+	function selectedFileNodes(clicked: TreeNode | undefined, selected: TreeNode[] | undefined): FileNode[] {
+		return withoutNestedSelections(
+			resolveSelection(clicked, selected, treeView.selection).filter((node): node is FileNode => node.kind === 'file')
+		);
+	}
+}
+
+const LAST_DOWNLOAD_FOLDER_KEY = 'remoteHostExplorer.lastDownloadFolder';
+
+/** Asks where to download to, starting from the last folder used in this workspace. */
+async function pickDownloadFolder(context: vscode.ExtensionContext, count: number): Promise<string | undefined> {
+	const last = context.workspaceState.get<string>(LAST_DOWNLOAD_FOLDER_KEY);
+	const workspaceFolder = vscode.workspace.workspaceFolders?.find(folder => folder.uri.scheme === 'file')?.uri;
+	const picked = await vscode.window.showOpenDialog({
+		canSelectFiles: false,
+		canSelectFolders: true,
+		canSelectMany: false,
+		defaultUri: last ? vscode.Uri.file(last) : workspaceFolder,
+		openLabel: 'Download Here',
+		title: `Download ${count === 1 ? '1 item' : `${count} items`} to`,
+	});
+	const folder = picked?.[0];
+	if (!folder) {
+		return undefined;
+	}
+	if (folder.scheme !== 'file') {
+		vscode.window.showWarningMessage('Choose a folder on this computer.');
+		return undefined;
+	}
+	await context.workspaceState.update(LAST_DOWNLOAD_FOLDER_KEY, folder.fsPath);
+	return folder.fsPath;
 }
 
 /** Uploads a saved document when its server profile has `autoUpload` enabled. */

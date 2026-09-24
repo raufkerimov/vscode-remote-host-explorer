@@ -67,7 +67,7 @@ export function registerCompareCommands(services: CommandServices): vscode.Dispo
 				const resolution = resolveServerForLocalPath(localUri.fsPath);
 				if (!resolution) {
 					vscode.window.showWarningMessage(
-						'No server mapping found for this file. Add a "Local mapped folder" to a server profile first.'
+						'No server mapping found for this file. Add a folder mapping to a server profile first.'
 					);
 					return;
 				}
@@ -85,7 +85,7 @@ export function registerCompareCommands(services: CommandServices): vscode.Dispo
 			})
 		),
 
-		// Remote Hosts tree: compare a remote file with the local copy in the server's mapped folder.
+		// Remote Hosts tree: compare a remote file with its local copy in the server's folder mapping.
 		vscode.commands.registerCommand(
 			'remoteHostExplorer.compareRemoteItem',
 			guarded('Compare failed', async (clicked?: TreeNode) => {
@@ -96,7 +96,7 @@ export function registerCompareCommands(services: CommandServices): vscode.Dispo
 				const localPath = localPathForRemote(node.server, node.entry.path);
 				if (!localPath) {
 					vscode.window.showWarningMessage(
-						'Only files inside the server\'s remote mapped folder can be compared. Set a "Local mapped folder" on the server first.'
+						'Only files inside one of the server\'s folder mappings can be compared. Add a folder mapping to the server first.'
 					);
 					return;
 				}

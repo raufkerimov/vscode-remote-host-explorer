@@ -175,3 +175,28 @@ input[type=checkbox] {
 	padding: 4px 10px;
 	white-space: nowrap;
 }
+
+.field-heading {
+	margin-top: 12px;
+	font-weight: 600;
+}
+
+.mapping {
+	margin-top: 8px;
+	padding: 0 10px 10px;
+	border: 1px solid var(--vscode-widget-border, var(--vscode-input-border, transparent));
+}
+
+.mapping label {
+	margin-top: 8px;
+}
+
+.mapping-remove {
+	margin-top: 8px;
+	padding: 4px 10px;
+}
+
+.add-mapping {
+	margin-top: 8px;
+	padding: 4px 10px;
+}

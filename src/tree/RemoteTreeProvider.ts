@@ -2,8 +2,8 @@ import * as path from 'path';
 import * as vscode from 'vscode';
 import {
 	getScopedServerProfiles,
+	folderMappings,
 	localPathForRemote,
-	mappedRemoteRoot,
 	whenServerProfilesLoaded,
 	type ProfileScope,
 	type ServerProfile,
@@ -37,9 +37,9 @@ export class ServerNode {
 
 /**
  * Context value for a file/directory row: `remoteHostExplorer.<file|directory>.<protocol>.<mapped|unmapped>`.
- * The last segment records whether the row has a local counterpart — the server has a `localPath` and the
- * row is inside its remote mapped folder — so Download and Compare can be disabled in `package.json`; the
- * protocol gates SSH-only actions.
+ * The last segment records whether the row has a local counterpart — it is inside the server folder of one
+ * of the profile's mappings — so Download and Compare can be disabled in `package.json`; the protocol gates
+ * SSH-only actions.
  */
 export function fileContextValue(entry: RemoteFileEntry, server: ServerProfile): string {
 	const kind = entry.isDirectory ? 'directory' : 'file';
@@ -173,12 +173,13 @@ export class RemoteTreeProvider implements vscode.TreeDataProvider<TreeNode>, vs
 			const state = connected ? 'connected' : inSession ? 'connection lost, reconnects when used' : 'not connected';
 			// Global servers are the ones that appear in every window, so they are labelled as such.
 			const scopeLabel = node.scope === 'global' ? ' · global' : '';
+			const mappings = folderMappings(node.server);
 			item.description = `${node.server.protocol}://${node.server.host} - ${state}${scopeLabel}`;
 			item.tooltip =
 				`${node.server.name}\n${node.server.protocol}://${node.server.host}\nRoot: ${node.server.remoteRoot}\n` +
 				(node.scope === 'project' ? 'Available in this project only' : 'Available in all projects') +
-				(node.server.localPath
-					? `\nLocal folder: ${node.server.localPath} ↔ ${mappedRemoteRoot(node.server)}`
+				(mappings.length > 0
+					? mappings.map(mapping => `\nLocal folder: ${mapping.localPath} ↔ ${mapping.remotePath}`).join('')
 					: '\nNo local folder mapped');
 			return item;
 		}

@@ -3,7 +3,7 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import * as vscode from 'vscode';
-import { isIgnored, type ServerProfile } from '../config/serverConfig';
+import { isIgnored, mappingRootForLocalPath, type ServerProfile } from '../config/serverConfig';
 import type { ConnectionManager } from './ConnectionManager';
 import type { RemoteClient } from './RemoteClient';
 import { rsyncUpload } from './rsyncUpload';
@@ -190,11 +190,12 @@ export async function withTransferProgress(
 }
 
 /**
- * Path used to match ignore globs. Patterns are documented as relative to the profile's `localPath`,
- * so they must be evaluated against that root even when the transfer started deeper in the tree.
+ * Path used to match ignore globs. Patterns are documented as relative to the mapping's local folder, so
+ * they are evaluated against that folder even when the transfer started deeper in the tree. Outside every
+ * mapping (a download into any folder) they are relative to what the user asked to transfer.
  */
 function ignorePathFor(server: ServerProfile, fallbackRoot: string, childPath: string): string {
-	const root = server.localPath ?? fallbackRoot;
+	const root = mappingRootForLocalPath(server, childPath) ?? fallbackRoot;
 	return path.relative(root, childPath).replace(/\\/g, '/');
 }
 

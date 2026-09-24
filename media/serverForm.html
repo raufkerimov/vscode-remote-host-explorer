@@ -81,18 +81,26 @@
 					<button type="button" id="browseRemoteRoot" class="secondary">Browse...</button>
 				</div>
 			</label>
-			<label>Local mapped folder <span class="hint">(optional; enables upload/download/auto-upload)</span>
-				<div class="path-row">
-					<input type="text" id="localPath">
-					<button type="button" id="browseLocalPath" class="secondary">Browse...</button>
+			<div class="field-heading">Folder mappings <span class="hint">(optional; enables upload/download/auto-upload)</span></div>
+			<div id="mappings"></div>
+			<button type="button" id="addMapping" class="secondary add-mapping">Add Mapping</button>
+			<template id="mapping-template">
+				<div class="mapping">
+					<label>Local folder
+						<div class="path-row">
+							<input type="text" class="mapping-local">
+							<button type="button" class="secondary mapping-browse-local">Browse...</button>
+						</div>
+					</label>
+					<label>Remote folder <span class="hint">(optional; defaults to the remote root path)</span>
+						<div class="path-row">
+							<input type="text" class="mapping-remote" placeholder="Same as remote root path">
+							<button type="button" class="secondary mapping-browse-remote">Browse...</button>
+						</div>
+					</label>
+					<button type="button" class="secondary mapping-remove">Remove</button>
 				</div>
-			</label>
-			<label>Remote mapped folder <span class="hint">(optional; defaults to the remote root path)</span>
-				<div class="path-row">
-					<input type="text" id="remoteMappedPath" placeholder="Same as remote root path">
-					<button type="button" id="browseRemoteMappedPath" class="secondary">Browse...</button>
-				</div>
-			</label>
+			</template>
 
 			<div class="checkbox-row">
 				<input type="checkbox" id="autoUpload">

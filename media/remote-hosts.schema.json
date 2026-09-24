@@ -65,18 +65,38 @@
             "type": "string",
             "description": "Root path on the remote server shown in the Remote Hosts view."
           },
+          "mappings": {
+            "type": "array",
+            "description": "Local folders linked to folders on the server, used for uploads, downloads, Compare, and auto-upload. When mapped folders are nested, the deepest one wins.",
+            "items": {
+              "type": "object",
+              "required": [
+                "localPath"
+              ],
+              "properties": {
+                "localPath": {
+                  "type": "string",
+                  "description": "Folder on this computer."
+                },
+                "remotePath": {
+                  "type": "string",
+                  "description": "Server folder that localPath corresponds to. Defaults to remoteRoot. Set it to browse a larger folder while mapping only part of it, for example a whole WordPress install with only the theme mapped."
+                }
+              }
+            }
+          },
           "localPath": {
             "type": "string",
-            "description": "Local folder mapped to remoteMappedPath (or remoteRoot when that is not set) for upload/download resolution."
+            "description": "Single local folder mapped to remoteMappedPath (or remoteRoot), as saved by earlier versions. Prefer mappings; both are honoured."
           },
           "remoteMappedPath": {
             "type": "string",
-            "description": "Server folder that localPath corresponds to. Defaults to remoteRoot. Set it to browse a larger folder while mapping only part of it, for example a whole WordPress install with only the theme mapped."
+            "description": "Server folder that localPath corresponds to. Defaults to remoteRoot. Prefer mappings."
           },
           "autoUpload": {
             "type": "boolean",
             "default": false,
-            "description": "Automatically upload files under localPath on save."
+            "description": "Automatically upload files inside a mapped local folder on save."
           },
           "ignoreGlobs": {
             "type": "array",
@@ -93,7 +113,7 @@
               "**/*.pem",
               "**/*.key"
             ],
-            "description": "Paths relative to localPath that are skipped by auto-upload and recursive uploads/downloads. Supports *, ?, and **. When omitted, the defaults apply; set [] to ignore nothing."
+            "description": "Paths relative to the mapped local folder that are skipped by auto-upload and recursive uploads/downloads. Supports *, ?, and **. When omitted, the defaults apply; set [] to ignore nothing."
           },
           "useRsyncForUpload": {
             "type": "boolean",

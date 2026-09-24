@@ -3,6 +3,16 @@
 All notable changes to Remote Host Explorer are documented here.
 This project follows [Semantic Versioning](https://semver.org/).
 
+## [0.1.6] - 2026-09-24
+
+- **Several folder mappings per server**: link more than one local folder to server folders, for
+  example a theme and a plugin of the same site. Servers from earlier versions keep their mapping.
+- **Download to Folder...** in the Remote Hosts view saves files and folders into any folder you pick,
+  even when the server has no mapping. Existing files are only replaced if you choose to.
+- **Upload to Remote Host** now lives only in the Explorer's context menu, and is greyed out for items
+  outside every mapped folder instead of warning afterwards. The editor title bar button is gone.
+- **Download to Local** is now only in the Remote Hosts view; it no longer appears in the Explorer.
+
 ## [0.1.5] - 2026-09-15
 
 - **Remote mapped folder**: map your local folder to a folder inside the one you browse, for example to

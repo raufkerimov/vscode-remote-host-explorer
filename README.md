@@ -34,10 +34,9 @@ workflow in the spirit of PhpStorm's Remote Host tool. Works over **SFTP**, **FT
    - **Authentication** — a password, or for SFTP a private key file or your SSH agent. The key path
      starts as `~/.ssh/id_rsa`; change it if your key has another name, such as `~/.ssh/id_ed25519`.
    - **Remote root path** — the server folder to show. **Browse...** lets you pick it.
-   - **Local mapped folder** — optional, but needed for uploading and downloading. Usually your
-     project folder.
-   - **Remote mapped folder** — optional; the server folder your local folder matches. Leave it empty
-     when that's the remote root path.
+   - **Folder mappings** — optional, but needed for uploading and downloading to your project. Each
+     mapping links a **Local folder** (usually your project folder) to a **Remote folder** on the
+     server; leave the remote folder empty when it's the remote root path. **Add Mapping** adds more.
 4. Click **Test Connection**, then **Add Server**.
 5. Click the plug icon next to the server to connect, then expand it to browse.
 
@@ -50,6 +49,8 @@ it matches what your hosting provider or administrator gives you.
 - **Right-click** a file, folder, or server for all actions.
 - **Select several items** with `Cmd`-click / `Ctrl`-click or `Shift`-click to delete, copy, back up, or
   download them together.
+- **Download to Folder...** saves items into any folder you choose, whether or not the server has a
+  folder mapping.
 - **Create** files and folders with **New File...** and **New Folder...** on a folder or the server.
 - **Move items** by dragging them onto a folder, or with **Cut** then **Paste**.
 - **Upload by dragging** files or folders from Finder, File Explorer, or VS Code's Explorer onto a folder
@@ -75,27 +76,30 @@ it matches what your hosting provider or administrator gives you.
 
 ## Uploading and downloading
 
-Uploading and downloading need a **Local mapped folder** on the server. It links a folder on your
-computer to the server's remote root, so `my-project/app/index.php` maps to `/var/www/app/index.php`.
+Uploading, downloading to your project, and Compare need a **folder mapping** on the server. A mapping
+links a folder on your computer to a folder on the server — by default the remote root path — so
+`my-project/app/index.php` maps to `/var/www/app/index.php`.
 
-To browse more of the server than you map, set a **Remote mapped folder** as well. For example, to see
-a whole WordPress install but work only on your theme:
+To browse more of the server than you map, set the mapping's **Remote folder**. A server can have
+several mappings. For example, to see a whole WordPress install but work only on your theme and one
+plugin:
 
 | Field | Value |
 | --- | --- |
 | Remote root path | `/var/www/site` |
-| Local mapped folder | `~/projects/my-theme` |
-| Remote mapped folder | `/var/www/site/wp-content/themes/my-theme` |
+| Mapping 1 | `~/projects/my-theme` ↔ `/var/www/site/wp-content/themes/my-theme` |
+| Mapping 2 | `~/projects/my-plugin` ↔ `/var/www/site/wp-content/plugins/my-plugin` |
 
 The Remote Hosts view then shows all of `/var/www/site`, while uploads, downloads, Compare, and upload
-on save use only the theme folder. Download and Compare are greyed out for items outside it.
+on save use only the mapped folders. If mapped folders are nested, the innermost one is used.
 
-- **Upload**: right-click files or folders in the Explorer and choose **Upload to Remote Host**, or use
-  the cloud icon in the editor title bar (shown for files inside a mapped folder).
+- **Upload**: right-click files or folders in the Explorer and choose **Upload to Remote Host**. It is
+  greyed out for items outside every mapped local folder.
 - **Upload on save**: turn on **Auto-upload on save** for the server.
-- **Download**: right-click items in the Remote Hosts view, or files in the Explorer, and choose
-  **Download to Local**. For servers without a local folder, or items outside the remote mapped folder,
-  this action is greyed out.
+- **Download**: right-click items in the Remote Hosts view and choose **Download to Local** to download
+  them into their mapped local folder. It is greyed out for items outside every mapped server folder.
+- **Download anywhere**: choose **Download to Folder...** instead and pick a folder. This works for any
+  item, with or without a mapping.
 - **Existing local files are never replaced silently.** If a download would overwrite a file on your
   computer, you choose **Overwrite**, **Skip**, or apply either to all remaining files. For a folder,
   all of these questions come first, before any file is transferred.
@@ -142,13 +146,13 @@ rsync can't answer password prompts, so the server must accept your SSH key with
 | **All projects** | Your VS Code user settings | In every window, marked `global` |
 
 To change a server's scope, edit it and change **Available in**. Hover over a server to see its scope
-and local folder.
+and folder mappings.
 
 `.vscode/remote-hosts.json` contains server names, hosts, usernames, and paths — never passwords. If
 you commit it, teammates get the same server list and enter their own credentials. If you don't want
 that, add `.vscode/remote-hosts.json` to `.gitignore`. Your other VS Code settings stay unaffected.
 
-If several folders are open, a new server is saved in the folder that contains its local mapped
+If several folders are open, a new server is saved in the folder that contains its first mapped local
 folder, or in the first folder otherwise.
 
 Servers saved by earlier versions in `.vscode/settings.json`, a `.code-workspace` file, or the old
@@ -206,9 +210,9 @@ you type. Each server needs a unique `id`, which its saved password is linked to
 | `privateKeyPath` | SFTP only. Path to a private key file; when set, key authentication is used. `~` is your home folder. |
 | `useSshAgent` | SFTP only. Authenticate with the keys loaded in your SSH agent. |
 | `remoteRoot` | Server folder shown as the root. |
-| `localPath` | Local folder linked to `remoteMappedPath` (or `remoteRoot`). Needed for uploads and downloads. |
-| `remoteMappedPath` | Server folder that `localPath` matches. Defaults to `remoteRoot`. |
-| `autoUpload` | Upload files in `localPath` when you save them. |
+| `mappings` | List of folder mappings, each `{ "localPath": "…", "remotePath": "…" }`. `remotePath` defaults to `remoteRoot`. Needed for uploads and downloads to your project. |
+| `localPath`, `remoteMappedPath` | A single mapping, as saved by earlier versions. Still honoured; saving the server in the form turns it into `mappings`. |
+| `autoUpload` | Upload files inside a mapped local folder when you save them. |
 | `ignoreGlobs` | Patterns to skip. If omitted, the defaults above apply. Use `[]` to skip nothing. |
 | `useRsyncForUpload` | SFTP only. Upload with `rsync` over SSH. |
 | `rsyncOptions` | Extra `rsync` options, one per line in the form. |
@@ -256,11 +260,12 @@ Authentication Agent** service. Or switch the server to private key authenticati
 Check that the path in **Private key path** exists and that your user can read the file.
 
 **"Download to Local" is greyed out.**
-The server has no local folder, or the item is outside its **Remote mapped folder**. Edit the server
-and set **Local mapped folder** (and **Remote mapped folder**, if needed).
+The item is outside every mapped server folder. Edit the server and add a folder mapping that covers
+it, or use **Download to Folder...** to save it anywhere.
 
-**The upload icon isn't in the editor title bar.**
-It appears only for files inside a server's local mapped folder.
+**"Upload to Remote Host" is greyed out in the Explorer.**
+The item is outside every mapped local folder. Edit the server and add a folder mapping for it. A
+folder created outside VS Code becomes available about a second later.
 
 **A file wasn't uploaded on save.**
 Check that **Auto-upload on save** is on for the server, the file is inside its local folder, and it
@@ -291,8 +296,10 @@ that `ssh` can log in to the server with your key without asking for a password.
 - On FTP, browsing waits while a transfer is running.
 - Very large files are held in memory while being copied or backed up on the server.
 - Rename uses an input box rather than editing the name in place.
-- In Remote-SSH, WSL, and Dev Container windows, the extension runs on your own computer, so
-  **Local mapped folder** refers to a folder on your computer.
+- Items can't be dragged from the Remote Hosts view into VS Code's Explorer, because the Explorer
+  doesn't accept drops from other views. Use **Download to Folder...** instead.
+- In Remote-SSH, WSL, and Dev Container windows, the extension runs on your own computer, so a mapped
+  **Local folder** is a folder on your computer.
 
 ## License
 

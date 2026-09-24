@@ -8,6 +8,13 @@ import { folderIndexForLocalPath, ProjectServerStore } from './projectServerFile
 /** `ftps` is explicit TLS (AUTH TLS on the normal FTP port). */
 export type RemoteProtocol = 'sftp' | 'ftp' | 'ftps';
 
+/** One local folder linked to one server folder. A profile can have several. */
+export interface FolderMapping {
+	localPath: string;
+	/** Server folder `localPath` corresponds to. Defaults to the profile's `remoteRoot`. */
+	remotePath?: string;
+}
+
 export interface ServerProfile {
 	id: string;
 	name: string;
@@ -21,11 +28,14 @@ export interface ServerProfile {
 	useSshAgent?: boolean;
 	/** Folder the tree shows. */
 	remoteRoot: string;
-	localPath?: string;
 	/**
-	 * Server folder that `localPath` corresponds to. Defaults to `remoteRoot`; set it to browse a larger
-	 * tree (a whole WordPress install) while mapping only part of it (one theme).
+	 * Local folders linked to server folders. Read through {@link folderMappings}, which also includes the
+	 * single mapping older versions saved in `localPath`/`remoteMappedPath`.
 	 */
+	mappings?: FolderMapping[];
+	/** Single mapping saved before `mappings` existed; the form converts it into `mappings` on save. */
+	localPath?: string;
+	/** Server folder of the `localPath` mapping. Defaults to `remoteRoot`. */
 	remoteMappedPath?: string;
 	autoUpload?: boolean;
 	ignoreGlobs?: string[];
@@ -34,34 +44,74 @@ export interface ServerProfile {
 	rsyncOptions?: string[];
 }
 
-/** The server folder the local folder maps to. */
-export function mappedRemoteRoot(server: ServerProfile): string {
-	return normalizeRemote(server.remoteMappedPath || server.remoteRoot) || '/';
+/** A mapping with both sides filled in: an absolute local folder and a normalized server folder. */
+export interface ResolvedMapping {
+	localPath: string;
+	remotePath: string;
+}
+
+/** The mappings as saved, the legacy `localPath` one first. Entries without a local folder are dropped. */
+export function declaredMappings(server: ServerProfile): FolderMapping[] {
+	const declared: FolderMapping[] = [
+		...(server.localPath ? [{ localPath: server.localPath, remotePath: server.remoteMappedPath }] : []),
+		...(Array.isArray(server.mappings) ? server.mappings : []),
+	];
+	return declared.filter(mapping => typeof mapping?.localPath === 'string' && mapping.localPath.trim() !== '');
+}
+
+/** Every mapping of a profile, with absolute local folders and the remote folder defaulted to `remoteRoot`. */
+export function folderMappings(server: ServerProfile): ResolvedMapping[] {
+	return declaredMappings(server).map(mapping => ({
+		localPath: normalizeLocal(mapping.localPath),
+		remotePath: normalizeRemote(mapping.remotePath || server.remoteRoot) || '/',
+	}));
+}
+
+export function hasFolderMappings(server: ServerProfile): boolean {
+	return folderMappings(server).length > 0;
 }
 
 /**
- * Local counterpart of a remote path, or `undefined` when the server has no local folder or the path is
- * outside the remote mapped folder. Pure so it can be unit tested.
+ * Local counterpart of a remote path, or `undefined` when the path is outside every mapped server folder.
+ * When mapped server folders are nested, the deepest one wins. Pure so it can be unit tested.
  */
 export function localPathForRemote(server: ServerProfile, remotePath: string): string | undefined {
-	if (!server.localPath) {
-		return undefined;
-	}
-	const root = mappedRemoteRoot(server);
 	const target = normalizeRemote(remotePath);
-	if (!isRemoteSameOrInside(root, target)) {
+	let best: ResolvedMapping | undefined;
+	for (const mapping of folderMappings(server)) {
+		if (isRemoteSameOrInside(mapping.remotePath, target) && (!best || mapping.remotePath.length > best.remotePath.length)) {
+			best = mapping;
+		}
+	}
+	if (!best) {
 		return undefined;
 	}
+	const root = best.remotePath;
 	const relative = target === root ? '' : target.slice(root === '/' ? 1 : root.length + 1);
 	// Remote names come from the server and are never trusted as local path components.
-	return relative ? path.join(server.localPath, toSafeRelativePath(relative)) : server.localPath;
+	return relative ? path.join(best.localPath, toSafeRelativePath(relative)) : best.localPath;
+}
+
+/**
+ * The local folder of the deepest mapping that contains `fsPath`, or `undefined` when none does. Ignore
+ * patterns are relative to it.
+ */
+export function mappingRootForLocalPath(server: ServerProfile, fsPath: string): string | undefined {
+	const target = normalizeLocal(fsPath);
+	let best: string | undefined;
+	for (const { localPath } of folderMappings(server)) {
+		if (isSameOrInside(localPath, target) && (!best || localPath.length > best.length)) {
+			best = localPath;
+		}
+	}
+	return best;
 }
 
 export interface LocalPathResolution {
 	server: ServerProfile;
 	/** Absolute remote path the local file maps to. */
 	remotePath: string;
-	/** POSIX path relative to the mapping root; `''` when the file *is* the root. */
+	/** POSIX path relative to the mapping's local folder; `''` when the file *is* that folder. */
 	relativePath: string;
 }
 
@@ -179,7 +229,7 @@ function folderForNewProfile(profile: ServerProfile): vscode.WorkspaceFolder {
 	if (folders.length === 0) {
 		throw new Error('Open a folder to save a project-scoped server.');
 	}
-	return folders[folderIndexForLocalPath(folders.map(folder => folder.uri.fsPath), profile.localPath)];
+	return folders[folderIndexForLocalPath(folders.map(folder => folder.uri.fsPath), folderMappings(profile)[0]?.localPath)];
 }
 
 /**
@@ -297,8 +347,8 @@ export async function removeServerProfile(id: string): Promise<void> {
 }
 
 /**
- * Resolves the profile whose `localPath` is the longest matching ancestor of the given file.
- * Pure so it can be unit tested without a configuration host.
+ * Resolves the mapping whose local folder is the deepest one containing the given file, across every
+ * profile. Pure so it can be unit tested without a configuration host.
  */
 export function resolveServerForLocalPathIn(
 	servers: readonly ServerProfile[],
@@ -306,22 +356,15 @@ export function resolveServerForLocalPathIn(
 ): LocalPathResolution | undefined {
 	const target = normalizeLocal(fsPath);
 
-	let best: ServerProfile | undefined;
-	let bestRoot = '';
+	let best: { server: ServerProfile; mapping: ResolvedMapping } | undefined;
 
 	for (const server of servers) {
-		if (!server.localPath) {
-			continue;
-		}
-		const root = normalizeLocal(server.localPath);
-		if (!isSameOrInside(root, target)) {
-			continue;
-		}
-		// Compare the normalized roots against each other so a trailing separator in one profile
-		// cannot make it look longer (and therefore more specific) than it really is.
-		if (!best || root.length > bestRoot.length) {
-			best = server;
-			bestRoot = root;
+		for (const mapping of folderMappings(server)) {
+			// Mapping roots are normalized, so a trailing separator cannot make one look longer (and
+			// therefore more specific) than it really is.
+			if (isSameOrInside(mapping.localPath, target) && (!best || mapping.localPath.length > best.mapping.localPath.length)) {
+				best = { server, mapping };
+			}
 		}
 	}
 
@@ -329,10 +372,9 @@ export function resolveServerForLocalPathIn(
 		return undefined;
 	}
 
-	const relativePath = target.slice(bestRoot.length).replace(/\\/g, '/').replace(/^\/+/, '');
-	const remoteRoot = mappedRemoteRoot(best);
-	const remotePath = relativePath ? joinRemote(remoteRoot, relativePath) : remoteRoot;
-	return { server: best, remotePath, relativePath };
+	const relativePath = target.slice(best.mapping.localPath.length).replace(/\\/g, '/').replace(/^\/+/, '');
+	const remotePath = relativePath ? joinRemote(best.mapping.remotePath, relativePath) : best.mapping.remotePath;
+	return { server: best.server, remotePath, relativePath };
 }
 
 export function resolveServerForLocalPath(fsPath: string): LocalPathResolution | undefined {
@@ -356,7 +398,7 @@ export const DEFAULT_IGNORE_GLOBS: readonly string[] = [
 ];
 
 /**
- * True when the profile's ignore patterns exclude a path relative to the mapping root. A profile with no
+ * True when the profile's ignore patterns exclude a path relative to a mapping's local folder. A profile with no
  * `ignoreGlobs` at all (e.g. hand-written in settings) gets the defaults; an explicit `[]` ignores nothing.
  */
 export function isIgnored(server: ServerProfile, relativePosixPath: string): boolean {

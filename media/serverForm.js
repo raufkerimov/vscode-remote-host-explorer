@@ -17,8 +17,6 @@
 		'username',
 		'privateKeyPath',
 		'remoteRoot',
-		'localPath',
-		'remoteMappedPath',
 		'ignoreGlobs',
 		'rsyncOptions',
 	];
@@ -36,6 +34,36 @@
 	const errorEl = byId('error');
 	const testButton = byId('testConnection');
 	const sections = { password: byId('auth-password'), key: byId('auth-key'), agent: byId('auth-agent') };
+	const mappingsEl = byId('mappings');
+	const mappingTemplate = byId('mapping-template');
+
+	// --- folder mappings --------------------------------------------------------
+
+	function mappingRows() {
+		return Array.from(mappingsEl.children);
+	}
+
+	function addMappingRow(mapping) {
+		const row = mappingTemplate.content.firstElementChild.cloneNode(true);
+		row.querySelector('.mapping-local').value = mapping.localPath || '';
+		row.querySelector('.mapping-remote').value = mapping.remotePath || '';
+		mappingsEl.appendChild(row);
+		return row;
+	}
+
+	function renderMappings(mappings) {
+		mappingsEl.textContent = '';
+		for (const mapping of mappings) {
+			addMappingRow(mapping);
+		}
+	}
+
+	function currentMappings() {
+		return mappingRows().map(row => ({
+			localPath: row.querySelector('.mapping-local').value,
+			remotePath: row.querySelector('.mapping-remote').value,
+		}));
+	}
 
 	function populateProtocols() {
 		protocolEl.textContent = '';
@@ -75,6 +103,9 @@
 		if (typeof values.scope === 'string') {
 			scopeEl.value = values.scope === 'project' && !initial.projectAvailable ? 'global' : values.scope;
 		}
+		if (Array.isArray(values.mappings)) {
+			renderMappings(values.mappings);
+		}
 	}
 
 	function isSftp() {
@@ -87,6 +118,7 @@
 			// FTP has no key authentication, whatever the hidden selector still says.
 			authMethod: isSftp() ? authMethodEl.value : 'password',
 			scope: scopeEl.value,
+			mappings: currentMappings(),
 		};
 		for (const field of TEXT_FIELDS) {
 			payload[field] = byId(field).value;
@@ -166,17 +198,34 @@
 	byId('cancel').addEventListener('click', () => vscode.postMessage({ type: 'cancel' }));
 
 	byId('browsePrivateKey').addEventListener('click', () => {
-		vscode.postMessage({ type: 'browseLocalFile', field: 'privateKeyPath' });
-	});
-	byId('browseLocalPath').addEventListener('click', () => {
-		vscode.postMessage({ type: 'browseLocalFolder', field: 'localPath' });
+		vscode.postMessage({ type: 'browsePrivateKey' });
 	});
 	byId('browseRemoteRoot').addEventListener('click', () => {
-		vscode.postMessage({ type: 'browseRemotePath', field: 'remoteRoot', payload: currentFormPayload() });
+		vscode.postMessage({ type: 'browseRemotePath', payload: currentFormPayload() });
 	});
-	byId('browseRemoteMappedPath').addEventListener('click', () => {
-		vscode.postMessage({ type: 'browseRemotePath', field: 'remoteMappedPath', payload: currentFormPayload() });
+
+	byId('addMapping').addEventListener('click', () => {
+		addMappingRow({}).querySelector('.mapping-local').focus();
+		saveRestorableState();
 	});
+	// Rows come and go, so their buttons and fields are handled by delegation, addressed by row position.
+	mappingsEl.addEventListener('click', event => {
+		const button = event.target instanceof Element ? event.target.closest('button') : null;
+		const row = button?.closest('.mapping');
+		if (!button || !row) {
+			return;
+		}
+		const mappingIndex = mappingRows().indexOf(row);
+		if (button.classList.contains('mapping-remove')) {
+			row.remove();
+			saveRestorableState();
+		} else if (button.classList.contains('mapping-browse-local')) {
+			vscode.postMessage({ type: 'browseLocalFolder', mappingIndex });
+		} else if (button.classList.contains('mapping-browse-remote')) {
+			vscode.postMessage({ type: 'browseRemotePath', mappingIndex, payload: currentFormPayload() });
+		}
+	});
+	mappingsEl.addEventListener('input', saveRestorableState);
 
 	testButton.addEventListener('click', () => {
 		statusEl.textContent = 'Testing...';
@@ -198,6 +247,14 @@
 			errorEl.textContent = '';
 			byId(message.field).value = message.value;
 			saveRestorableState();
+		}
+		if (message.type === 'setMappingField') {
+			const row = mappingRows()[message.index];
+			if (row) {
+				errorEl.textContent = '';
+				row.querySelector(message.key === 'localPath' ? '.mapping-local' : '.mapping-remote').value = message.value;
+				saveRestorableState();
+			}
 		}
 		if (message.type === 'testResult') {
 			testButton.disabled = false;

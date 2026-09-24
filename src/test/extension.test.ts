@@ -18,7 +18,8 @@ suite('Extension', () => {
 			'remoteHostExplorer.addServer',
 			'remoteHostExplorer.refresh',
 			'remoteHostExplorer.uploadFile',
-			'remoteHostExplorer.downloadFile',
+			'remoteHostExplorer.downloadRemoteItem',
+			'remoteHostExplorer.downloadRemoteItemTo',
 			'remoteHostExplorer.newFile',
 		]) {
 			assert.ok(commands.includes(expected), `missing command: ${expected}`);

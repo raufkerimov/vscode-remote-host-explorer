@@ -84,6 +84,7 @@ remote-host-explorer/
 │   │   ├── serverConfig.ts   # ServerProfile, project/global scoped storage, legacy settings migration
 │   │   ├── projectServerFile.ts # `.vscode/remote-hosts.json` parsing (JSONC) + watched in-memory store
 │   │   ├── legacyState.ts    # Moves 0.1.0 `remoteHostViewer.*` globalState keys on activation
+│   │   ├── mappedFolderIndex.ts # Lists mapped local folders into a context key (Explorer upload enablement)
 │   │   └── secrets.ts        # SecretStorage wrapper for passwords & key passphrases
 │   ├── remote/
 │   │   ├── RemoteClient.ts   # RemoteClient interface, file entry types, error predicates
@@ -215,6 +216,13 @@ remote-host-explorer/
   `menus.commandPalette` entry with `"when": "false"`.
 - `remoteHostExplorer.activeEditorMapped` / `remoteHostExplorer.hasMappings` context keys gate the
   editor-title and Explorer contributions; they are refreshed in `extension.ts`.
+- Upload is Explorer-only and Download to Local is tree-only. The Explorer's upload is greyed out via
+  `enablement` on `resourcePath`/`resourceDirname in remoteHostExplorer.mappedFolders`: when clauses
+  can't test "is inside", so `MappedFolderIndex` lists every mapped local folder (ignored folders listed
+  but not entered, capped at `MAX_INDEXED_FOLDERS`, beyond which `mappedFoldersIncomplete` enables it).
+- VS Code's Explorer rejects drops that start in another tree view, so dragging tree items into the
+  Explorer cannot work. Downloads to an arbitrary folder go through **Download to Folder...**
+  (`downloadRemoteItemTo`) instead.
 - **Multi-select**: the tree uses `canSelectMany`, so context-menu handlers receive
   `(clickedNode, selectedNodes)` and keybindings receive nothing. Always resolve targets with
   `resolveSelection(clicked, selected, treeView.selection)`, and drop children of selected folders with
@@ -236,12 +244,15 @@ remote-host-explorer/
   for SFTP, 1 for FTP. Never prompt from inside the parallel phase; concurrent modals would interleave.
 - Tree drops accept `text/uri-list` (file manager / Explorer) and upload through `uploadPath`, asking
   `promptForConflict` before replacing an existing remote item.
-- The mapping pairs `localPath` with `remoteMappedPath`, which defaults to `remoteRoot` (the browsed
-  folder). Never map against `remoteRoot` directly: use `mappedRemoteRoot(server)`, `localPathForRemote`
-  (remote → local, `undefined` outside the mapped folder) and `resolveServerForLocalPath` (local → remote).
-  A row is `.mapped` only when `localPathForRemote` resolves it.
-- `ignoreGlobs` are evaluated relative to the profile's `localPath` and apply to auto-upload and
-  recursive transfers, not to an explicitly requested single-file upload.
+- A profile has any number of mappings (`mappings: { localPath, remotePath? }[]`, `remotePath`
+  defaulting to `remoteRoot`), plus the single legacy `localPath`/`remoteMappedPath` pair older versions
+  saved; the form rewrites both into `mappings`. Always read them through `folderMappings(server)`, and
+  resolve with `localPathForRemote` (remote → local, deepest remote folder wins, `undefined` outside
+  every mapping) and `resolveServerForLocalPath` (local → remote, deepest local folder wins across all
+  profiles). A row is `.mapped` only when `localPathForRemote` resolves it.
+- `ignoreGlobs` are evaluated relative to the local folder of the mapping containing the file
+  (`mappingRootForLocalPath`), or to the transfer root outside every mapping, and apply to auto-upload
+  and recursive transfers, not to an explicitly requested single-file upload.
 - `DEFAULT_IGNORE_GLOBS` in `config/serverConfig.ts` is the single source of the defaults (the form and
   `isIgnored` use it; keep the `package.json` schema default in sync). A profile with no `ignoreGlobs`
   field gets the defaults; an explicit `[]` ignores nothing.

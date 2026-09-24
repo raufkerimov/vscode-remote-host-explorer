@@ -1,8 +1,9 @@
 import * as crypto from 'crypto';
 import * as fs from 'fs';
 import * as vscode from 'vscode';
-import type { ProfileScope, RemoteProtocol, ServerProfile } from '../config/serverConfig';
+import type { FolderMapping, ProfileScope, RemoteProtocol, ServerProfile } from '../config/serverConfig';
 import {
+	declaredMappings,
 	DEFAULT_IGNORE_GLOBS,
 	DEFAULT_PRIVATE_KEY_PATH,
 	getProfileScope,
@@ -38,8 +39,8 @@ export interface SubmittedForm {
 	privateKeyPath: string;
 	passphrase: string;
 	remoteRoot: string;
-	localPath: string;
-	remoteMappedPath: string;
+	/** One entry per row; a blank remote path means the remote root. */
+	mappings: { localPath: string; remotePath: string }[];
 	autoUpload: boolean;
 	ignoreGlobs: string;
 	useRsyncForUpload: boolean;
@@ -50,9 +51,10 @@ export interface SubmittedForm {
 type IncomingMessage =
 	| { type: 'cancel' }
 	| { type: 'submit'; payload: SubmittedForm }
-	| { type: 'browseRemotePath'; field: 'remoteRoot' | 'remoteMappedPath'; payload: SubmittedForm }
+	| { type: 'browseRemotePath'; payload: SubmittedForm; mappingIndex?: number }
 	| { type: 'testConnection'; payload: SubmittedForm }
-	| { type: 'browseLocalFile' | 'browseLocalFolder'; field: 'privateKeyPath' | 'localPath' };
+	| { type: 'browsePrivateKey' }
+	| { type: 'browseLocalFolder'; mappingIndex: number };
 
 interface PanelContext {
 	context: vscode.ExtensionContext;
@@ -137,9 +139,9 @@ async function handleMessage(
 			panel.dispose();
 			return;
 
-		case 'browseLocalFile':
+		case 'browsePrivateKey':
 		case 'browseLocalFolder': {
-			const wantsFile = message.type === 'browseLocalFile';
+			const wantsFile = message.type === 'browsePrivateKey';
 			const picked = await vscode.window.showOpenDialog({
 				canSelectFiles: wantsFile,
 				canSelectFolders: !wantsFile,
@@ -147,13 +149,17 @@ async function handleMessage(
 				openLabel: wantsFile ? 'Select private key' : 'Select folder',
 			});
 			if (picked?.[0]) {
-				panel.webview.postMessage({ type: 'setField', field: message.field, value: picked[0].fsPath });
+				panel.webview.postMessage(
+					message.type === 'browsePrivateKey'
+						? { type: 'setField', field: 'privateKeyPath', value: picked[0].fsPath }
+						: { type: 'setMappingField', index: message.mappingIndex, key: 'localPath', value: picked[0].fsPath }
+				);
 			}
 			return;
 		}
 
 		case 'browseRemotePath':
-			await handleBrowseRemotePath(panel, panelContext, message.payload, message.field);
+			await handleBrowseRemotePath(panel, panelContext, message.payload, message.mappingIndex);
 			return;
 
 		case 'testConnection':
@@ -185,7 +191,24 @@ function validate(form: SubmittedForm): string | undefined {
 			return 'Port must be a whole number between 1 and 65535.';
 		}
 	}
+	if (form.mappings.some(mapping => !mapping.localPath.trim() && mapping.remotePath.trim())) {
+		return 'Every folder mapping needs a local folder.';
+	}
+	const localFolders = mappingsFromForm(form).map(mapping => mapping.localPath);
+	if (new Set(localFolders).size < localFolders.length) {
+		return 'Each local folder can only be mapped once per server.';
+	}
 	return undefined;
+}
+
+/** Filled-in mapping rows; rows left completely blank are dropped. */
+function mappingsFromForm(form: SubmittedForm): FolderMapping[] {
+	return form.mappings
+		.filter(mapping => mapping.localPath.trim())
+		.map(mapping => ({
+			localPath: mapping.localPath.trim(),
+			remotePath: normalizeRemote(mapping.remotePath.trim()) || undefined,
+		}));
 }
 
 async function handleSubmit(
@@ -205,6 +228,7 @@ async function handleSubmit(
 	const usesKeyAuth = form.protocol === 'sftp' && form.authMethod === 'key';
 	const usesAgent = form.protocol === 'sftp' && form.authMethod === 'agent';
 	const copyFrom = duplicateCredentialSource(existing, source, form);
+	const mappings = mappingsFromForm(form);
 
 	if (usesAgent) {
 		// The agent holds the keys; a stored password or passphrase would be a credential nothing uses.
@@ -236,8 +260,8 @@ async function handleSubmit(
 		privateKeyPath: usesKeyAuth ? form.privateKeyPath.trim() || undefined : undefined,
 		useSshAgent: usesAgent || undefined,
 		remoteRoot: normalizeRemote(form.remoteRoot.trim()) || '/',
-		localPath: form.localPath.trim() || undefined,
-		remoteMappedPath: normalizeRemote(form.remoteMappedPath.trim()) || undefined,
+		// Replaces the single `localPath`/`remoteMappedPath` mapping of older versions, which the form showed as a row.
+		mappings: mappings.length > 0 ? mappings : undefined,
 		autoUpload: form.autoUpload,
 		ignoreGlobs: splitLines(form.ignoreGlobs),
 		useRsyncForUpload: form.protocol === 'sftp' ? form.useRsyncForUpload : false,
@@ -262,15 +286,17 @@ async function handleBrowseRemotePath(
 	panel: vscode.WebviewPanel,
 	panelContext: PanelContext,
 	form: SubmittedForm,
-	field: 'remoteRoot' | 'remoteMappedPath'
+	/** The mapping row whose remote folder is being chosen; `undefined` for the remote root. */
+	mappingIndex: number | undefined
 ): Promise<void> {
 	const problem = validateForConnect(form);
 	if (problem) {
 		panel.webview.postMessage({ type: 'error', message: problem });
 		return;
 	}
-	// The mapped folder usually lives inside the root, so start browsing from whichever is filled in.
-	const startPath = normalizeRemote((field === 'remoteMappedPath' && form.remoteMappedPath.trim()) || form.remoteRoot.trim()) || '/';
+	// A mapped folder usually lives inside the root, so start browsing from whichever is filled in.
+	const mappedPath = mappingIndex === undefined ? '' : form.mappings[mappingIndex]?.remotePath.trim();
+	const startPath = normalizeRemote(mappedPath || form.remoteRoot.trim()) || '/';
 
 	let client: RemoteClient | undefined;
 	try {
@@ -278,7 +304,11 @@ async function handleBrowseRemotePath(
 		await client.connect();
 		const selected = await pickRemoteDirectory(client, startPath);
 		if (selected) {
-			panel.webview.postMessage({ type: 'setField', field, value: selected });
+			panel.webview.postMessage(
+				mappingIndex === undefined
+					? { type: 'setField', field: 'remoteRoot', value: selected }
+					: { type: 'setMappingField', index: mappingIndex, key: 'remotePath', value: selected }
+			);
 		}
 	} catch (err) {
 		panel.webview.postMessage({ type: 'error', message: `Could not browse remote server: ${(err as Error).message}` });
@@ -315,7 +345,7 @@ function validateForConnect(form: SubmittedForm): string | undefined {
 	if (!form.host.trim()) {
 		return 'Enter a host first.';
 	}
-	return validate({ ...form, name: form.name || 'unnamed', remoteRoot: form.remoteRoot || '/' });
+	return validate({ ...form, name: form.name || 'unnamed', remoteRoot: form.remoteRoot || '/', mappings: [] });
 }
 
 /**
@@ -475,8 +505,10 @@ async function renderForm(
 			// Only saved when private key authentication is chosen; password and agent servers drop it.
 			privateKeyPath: source?.privateKeyPath ?? DEFAULT_PRIVATE_KEY_PATH,
 			remoteRoot: source?.remoteRoot ?? '/',
-			localPath: source?.localPath ?? '',
-			remoteMappedPath: source?.remoteMappedPath ?? '',
+			// A new server starts with one empty row so the fields are visible; blank rows aren't saved.
+			mappings: source && declaredMappings(source).length > 0
+				? declaredMappings(source).map(mapping => ({ localPath: mapping.localPath, remotePath: mapping.remotePath ?? '' }))
+				: [{ localPath: '', remotePath: '' }],
 			autoUpload: source?.autoUpload ?? false,
 			ignoreGlobs: (source?.ignoreGlobs ?? DEFAULT_IGNORE_GLOBS).join('\n'),
 			useRsyncForUpload: source?.useRsyncForUpload ?? false,

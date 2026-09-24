@@ -2,11 +2,13 @@ import * as vscode from 'vscode';
 import {
 	activateServerProfiles,
 	getServerProfiles,
+	hasFolderMappings,
 	onDidChangeServerProfiles,
 	resolveServerForLocalPath,
 	whenServerProfilesLoaded,
 } from './config/serverConfig';
 import { migrateLegacyState } from './config/legacyState';
+import { MappedFolderIndex } from './config/mappedFolderIndex';
 import { SecretsManager } from './config/secrets';
 import { ConnectionManager } from './remote/ConnectionManager';
 import { HostKeyStore } from './remote/hostKeys';
@@ -58,6 +60,8 @@ export async function activate(context: vscode.ExtensionContext) {
 	context.subscriptions.push(
 		outputChannel,
 		activateServerProfiles(outputChannel),
+		// Greys out the Explorer's upload action for items outside every mapping.
+		new MappedFolderIndex(outputChannel),
 		treeView,
 		new vscode.Disposable(() => {
 			void connections.disposeAll();
@@ -97,7 +101,7 @@ function updateContextKeys(): void {
 	const uri = vscode.window.activeTextEditor?.document.uri;
 	const activeEditorMapped =
 		uri?.scheme === 'file' ? Boolean(resolveServerForLocalPath(uri.fsPath)) : false;
-	const hasMappings = getServerProfiles().some(server => Boolean(server.localPath));
+	const hasMappings = getServerProfiles().some(hasFolderMappings);
 
 	void vscode.commands.executeCommand('setContext', CONTEXT_ACTIVE_EDITOR_MAPPED, activeEditorMapped);
 	void vscode.commands.executeCommand('setContext', CONTEXT_HAS_MAPPINGS, hasMappings);

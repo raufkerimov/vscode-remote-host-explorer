@@ -3,7 +3,7 @@
   "displayName": "Remote Host Explorer",
   "description": "A fast and lightweight PhpStorm-style Remote Host manager for VS Code. Features a friendly GUI for server configuration, background upload-on-save, and direct remote file management over SFTP, FTPS, and FTP.",
   "icon": "media/icon.png",
-  "version": "0.1.5",
+  "version": "0.1.6",
   "license": "MIT",
   "publisher": "raufkerimov",
   "author": {
@@ -130,12 +130,8 @@
         "command": "remoteHostExplorer.uploadFile",
         "title": "Upload to Remote Host",
         "category": "Remote Host Explorer",
-        "icon": "$(cloud-upload)"
-      },
-      {
-        "command": "remoteHostExplorer.downloadFile",
-        "title": "Download to Local",
-        "category": "Remote Host Explorer"
+        "icon": "$(cloud-upload)",
+        "enablement": "resourceScheme == file && (remoteHostExplorer.mappedFoldersIncomplete || resourcePath in remoteHostExplorer.mappedFolders || resourceDirname in remoteHostExplorer.mappedFolders)"
       },
       {
         "command": "remoteHostExplorer.compareWithRemote",
@@ -194,6 +190,11 @@
         "title": "Download to Local",
         "category": "Remote Host Explorer",
         "enablement": "viewItem =~ /\\.mapped$/"
+      },
+      {
+        "command": "remoteHostExplorer.downloadRemoteItemTo",
+        "title": "Download to Folder...",
+        "category": "Remote Host Explorer"
       },
       {
         "command": "remoteHostExplorer.compareRemoteItem",
@@ -275,16 +276,16 @@
           "when": "false"
         },
         {
+          "command": "remoteHostExplorer.downloadRemoteItemTo",
+          "when": "false"
+        },
+        {
           "command": "remoteHostExplorer.compareRemoteItem",
           "when": "false"
         },
         {
           "command": "remoteHostExplorer.uploadFile",
-          "when": "remoteHostExplorer.activeEditorMapped"
-        },
-        {
-          "command": "remoteHostExplorer.downloadFile",
-          "when": "remoteHostExplorer.activeEditorMapped"
+          "when": "false"
         },
         {
           "command": "remoteHostExplorer.compareWithRemote",
@@ -375,14 +376,19 @@
           "group": "2_transfer@1"
         },
         {
+          "command": "remoteHostExplorer.downloadRemoteItemTo",
+          "when": "view == remoteHostExplorer.servers && viewItem =~ /^remoteHostExplorer\\.(file|directory)\\./",
+          "group": "2_transfer@2"
+        },
+        {
           "command": "remoteHostExplorer.compareRemoteItem",
           "when": "view == remoteHostExplorer.servers && !listMultiSelection && viewItem =~ /^remoteHostExplorer\\.file\\./",
-          "group": "2_transfer@2"
+          "group": "2_transfer@3"
         },
         {
           "command": "remoteHostExplorer.backupFile",
           "when": "view == remoteHostExplorer.servers && viewItem =~ /^remoteHostExplorer\\.file\\./",
-          "group": "2_transfer@3"
+          "group": "2_transfer@4"
         },
         {
           "command": "remoteHostExplorer.cutFile",
@@ -420,22 +426,10 @@
           "group": "4_terminal@1"
         }
       ],
-      "editor/title": [
-        {
-          "command": "remoteHostExplorer.uploadFile",
-          "when": "remoteHostExplorer.activeEditorMapped",
-          "group": "navigation"
-        }
-      ],
       "explorer/context": [
         {
           "command": "remoteHostExplorer.uploadFile",
-          "when": "remoteHostExplorer.hasMappings",
-          "group": "remoteHostExplorer"
-        },
-        {
-          "command": "remoteHostExplorer.downloadFile",
-          "when": "remoteHostExplorer.hasMappings",
+          "when": "remoteHostExplorer.hasMappings && resourceScheme == file",
           "group": "remoteHostExplorer"
         },
         {
@@ -517,18 +511,38 @@
                 "type": "string",
                 "description": "Root path on the remote server shown in the Remote Hosts view."
               },
+              "mappings": {
+                "type": "array",
+                "description": "Local folders linked to folders on the server, used for uploads, downloads, Compare, and auto-upload. When mapped folders are nested, the deepest one wins.",
+                "items": {
+                  "type": "object",
+                  "required": [
+                    "localPath"
+                  ],
+                  "properties": {
+                    "localPath": {
+                      "type": "string",
+                      "description": "Folder on this computer."
+                    },
+                    "remotePath": {
+                      "type": "string",
+                      "description": "Server folder that localPath corresponds to. Defaults to remoteRoot. Set it to browse a larger folder while mapping only part of it, for example a whole WordPress install with only the theme mapped."
+                    }
+                  }
+                }
+              },
               "localPath": {
                 "type": "string",
-                "description": "Local folder mapped to remoteMappedPath (or remoteRoot when that is not set) for upload/download resolution."
+                "description": "Single local folder mapped to remoteMappedPath (or remoteRoot), as saved by earlier versions. Prefer mappings; both are honoured."
               },
               "remoteMappedPath": {
                 "type": "string",
-                "description": "Server folder that localPath corresponds to. Defaults to remoteRoot. Set it to browse a larger folder while mapping only part of it, for example a whole WordPress install with only the theme mapped."
+                "description": "Server folder that localPath corresponds to. Defaults to remoteRoot. Prefer mappings."
               },
               "autoUpload": {
                 "type": "boolean",
                 "default": false,
-                "description": "Automatically upload files under localPath on save."
+                "description": "Automatically upload files inside a mapped local folder on save."
               },
               "ignoreGlobs": {
                 "type": "array",
@@ -545,7 +559,7 @@
                   "**/*.pem",
                   "**/*.key"
                 ],
-                "description": "Paths relative to localPath that are skipped by auto-upload and recursive uploads/downloads. Supports *, ?, and **. When omitted, the defaults apply; set [] to ignore nothing."
+                "description": "Paths relative to the mapped local folder that are skipped by auto-upload and recursive uploads/downloads. Supports *, ?, and **. When omitted, the defaults apply; set [] to ignore nothing."
               },
               "useRsyncForUpload": {
                 "type": "boolean",
