@@ -6,6 +6,8 @@ export interface RemoteFileEntry {
 	isSymbolicLink?: boolean;
 	size: number;
 	modifiedAt: number;
+	/** Permission bits (`0o644`) when the server reports them. */
+	permissions?: number;
 }
 
 export interface RemoteClient {
@@ -27,6 +29,8 @@ export interface RemoteClient {
 	mkdir(remotePath: string): Promise<void>;
 	delete(remotePath: string, isDirectory: boolean): Promise<void>;
 	rename(fromPath: string, toPath: string): Promise<void>;
+	/** Sets permission bits. FTP uses `SITE CHMOD`, which some servers don't support. */
+	chmod(remotePath: string, mode: number): Promise<void>;
 }
 
 export interface HostKeyPolicy {
@@ -81,4 +85,17 @@ export function isMissingPathError(error: unknown): boolean {
 	}
 	const message = String(candidate?.message || '');
 	return message.includes('No such file') || message.includes('no such file');
+}
+
+const nameCollator = new Intl.Collator(undefined, { numeric: true, sensitivity: 'base' });
+
+/**
+ * Listing order everywhere a server folder is shown: folders first, then names ignoring case and with
+ * numbers compared by value (`v2` before `v10`). Servers return entries in no particular order.
+ */
+export function compareEntries(a: RemoteFileEntry, b: RemoteFileEntry): number {
+	if (a.isDirectory !== b.isDirectory) {
+		return a.isDirectory ? -1 : 1;
+	}
+	return nameCollator.compare(a.name, b.name) || (a.name < b.name ? -1 : a.name > b.name ? 1 : 0);
 }

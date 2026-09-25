@@ -38,6 +38,8 @@ export interface ServerProfile {
 	/** Server folder of the `localPath` mapping. Defaults to `remoteRoot`. */
 	remoteMappedPath?: string;
 	autoUpload?: boolean;
+	/** A live server: every action that changes files on it asks first (`confirmProductionChange`). */
+	production?: boolean;
 	ignoreGlobs?: string[];
 	/** SFTP only: upload via `rsync` over ssh instead of SFTP put (faster for large/many files). */
 	useRsyncForUpload?: boolean;

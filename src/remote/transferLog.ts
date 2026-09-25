@@ -1,7 +1,10 @@
 import * as vscode from 'vscode';
 
-/** What happened to one file: sent, left out by an ignore pattern, kept locally at the user's request, or failed. */
-export type TransferEntryStatus = 'done' | 'ignored' | 'kept' | 'failed';
+/**
+ * What happened to one file: sent, left out by an ignore pattern, local copy kept (download), server copy
+ * kept because it changed there (upload), or failed.
+ */
+export type TransferEntryStatus = 'done' | 'ignored' | 'kept' | 'skipped' | 'failed';
 
 export interface TransferEntry {
 	/** Local paths as they are; remote ones as `server:/path`. */
@@ -33,9 +36,15 @@ export class TransferLog {
 	readonly onDidChange = this.changed.event;
 	private nextId = 1;
 	private list: TransferRecord[] = [];
+	private finished: TransferRecord | undefined;
 
 	get records(): readonly TransferRecord[] {
 		return this.list;
+	}
+
+	/** The transfer that ended most recently — the one a completion notification is about. */
+	get lastFinished(): TransferRecord | undefined {
+		return this.finished && this.list.includes(this.finished) ? this.finished : undefined;
 	}
 
 	start(title: string): TransferRecord {
@@ -53,6 +62,7 @@ export class TransferLog {
 	finish(record: TransferRecord, state: Exclude<TransferState, 'running'>, error?: string): void {
 		record.state = state;
 		record.error = error;
+		this.finished = record;
 		this.changed.fire();
 	}
 
@@ -65,8 +75,8 @@ export class TransferLog {
 
 export const transferLog = new TransferLog();
 
-/** Opens the Transfers view; VS Code registers `<viewId>.focus` for every view. */
-export const SHOW_TRANSFERS_COMMAND = 'remoteHostExplorer.transfers.focus';
+/** Opens the Transfers view with the last finished transfer expanded; registered in `extension.ts`. */
+export const SHOW_TRANSFERS_COMMAND = 'remoteHostExplorer.showTransfers';
 
 const SHOW_TRANSFERS = 'Show Transfers';
 

@@ -20,7 +20,7 @@
 		'ignoreGlobs',
 		'rsyncOptions',
 	];
-	const CHECKBOX_FIELDS = ['autoUpload', 'useRsyncForUpload'];
+	const CHECKBOX_FIELDS = ['autoUpload', 'useRsyncForUpload', 'production'];
 	// Secrets are deliberately excluded from persisted webview state so they never reach disk.
 	const SECRET_FIELDS = ['password', 'passphrase'];
 
@@ -150,6 +150,7 @@
 	/** SSH-only options (key auth, rsync) disappear for FTP, and plain FTP gets an encryption warning. */
 	function updateProtocolSections() {
 		authMethodRow.classList.toggle('hidden', !isSftp());
+		byId('importSshConfig').classList.toggle('hidden', !isSftp());
 		rsyncSection.classList.toggle('active', isSftp());
 		insecureWarning.classList.toggle('active', protocolEl.value === 'ftp');
 		byId('port').placeholder = String(initial.defaultPorts[protocolEl.value] ?? '');
@@ -200,6 +201,9 @@
 	byId('browsePrivateKey').addEventListener('click', () => {
 		vscode.postMessage({ type: 'browsePrivateKey' });
 	});
+	byId('importSshConfig').addEventListener('click', () => {
+		vscode.postMessage({ type: 'importSshConfig' });
+	});
 	byId('browseRemoteRoot').addEventListener('click', () => {
 		vscode.postMessage({ type: 'browseRemotePath', payload: currentFormPayload() });
 	});
@@ -247,6 +251,17 @@
 			errorEl.textContent = '';
 			byId(message.field).value = message.value;
 			saveRestorableState();
+		}
+		if (message.type === 'applySshHost') {
+			errorEl.textContent = '';
+			applyValues(message.values);
+			if (!byId('name').value.trim()) {
+				byId('name').value = message.suggestedName;
+			}
+			updateProtocolSections();
+			saveRestorableState();
+			statusEl.textContent = message.notice || '';
+			statusEl.className = 'status';
 		}
 		if (message.type === 'setMappingField') {
 			const row = mappingRows()[message.index];

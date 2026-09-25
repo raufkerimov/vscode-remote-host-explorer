@@ -15,6 +15,7 @@ const ENTRY_ICONS: Record<TransferEntry['status'], vscode.ThemeIcon> = {
 	done: new vscode.ThemeIcon('pass', new vscode.ThemeColor('testing.iconPassed')),
 	ignored: new vscode.ThemeIcon('circle-slash', new vscode.ThemeColor('disabledForeground')),
 	kept: new vscode.ThemeIcon('circle-slash', new vscode.ThemeColor('disabledForeground')),
+	skipped: new vscode.ThemeIcon('circle-slash', new vscode.ThemeColor('disabledForeground')),
 	failed: new vscode.ThemeIcon('error', new vscode.ThemeColor('testing.iconFailed')),
 };
 
@@ -22,6 +23,7 @@ const ENTRY_NOTES: Record<TransferEntry['status'], string> = {
 	done: '',
 	ignored: 'ignored · ',
 	kept: 'kept local copy · ',
+	skipped: 'kept newer server copy · ',
 	failed: 'failed · ',
 };
 
@@ -34,7 +36,7 @@ export function describeRecord(record: TransferRecord): string {
 	const parts = [
 		`${counts.get('done') ?? 0} transferred`,
 		counts.get('ignored') ? `${counts.get('ignored')} ignored` : '',
-		counts.get('kept') ? `${counts.get('kept')} kept` : '',
+		counts.get('kept') || counts.get('skipped') ? `${(counts.get('kept') ?? 0) + (counts.get('skipped') ?? 0)} kept` : '',
 		counts.get('failed') ? `${counts.get('failed')} failed` : '',
 	].filter(Boolean);
 	const state = record.state === 'running' ? 'running' : record.state === 'done' ? '' : record.state;
@@ -64,11 +66,18 @@ export class TransferLogProvider implements vscode.TreeDataProvider<TransferNode
 		return isRecord(node) ? node.entries : [];
 	}
 
+	/** Needed by `TreeView.reveal`: files belong to their transfer, transfers are top level. */
+	getParent(node: TransferNode): TransferNode | undefined {
+		return isRecord(node) ? undefined : this.log.records.find(record => record.entries.includes(node));
+	}
+
 	getTreeItem(node: TransferNode): vscode.TreeItem {
 		if (isRecord(node)) {
 			const item = new vscode.TreeItem(
 				node.title,
-				node.entries.length > 0 ? vscode.TreeItemCollapsibleState.Collapsed : vscode.TreeItemCollapsibleState.None
+				// Always expandable: a transfer starts with no files, and a row created as a leaf may not
+				// become expandable when its files arrive.
+				vscode.TreeItemCollapsibleState.Collapsed
 			);
 			item.id = `transfer:${node.id}`;
 			item.description = describeRecord(node);

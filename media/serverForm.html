@@ -22,6 +22,11 @@
 				<span class="hint" id="scope-hint"></span>
 			</label>
 
+			<div class="checkbox-row">
+				<input type="checkbox" id="production">
+				<label for="production">Production server <span class="hint">(ask before changing any file on it)</span></label>
+			</div>
+
 			<div class="row">
 				<div>
 					<label>Protocol
@@ -39,7 +44,12 @@
 				Plain FTP sends your password and files unencrypted. Prefer SFTP or FTPS when the server supports them.
 			</div>
 
-			<label>Host<input type="text" id="host" placeholder="example.com"></label>
+			<label>Host
+				<div class="path-row">
+					<input type="text" id="host" placeholder="example.com">
+					<button type="button" id="importSshConfig" class="secondary" title="Fill in host, port, user, and key from ~/.ssh/config">From SSH Config...</button>
+				</div>
+			</label>
 			<label>Username <span class="hint">(optional)</span><input type="text" id="username"></label>
 
 			<label id="auth-method-row">Authentication

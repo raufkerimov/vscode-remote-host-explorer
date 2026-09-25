@@ -1,4 +1,5 @@
 import * as fs from 'fs';
+import { PassThrough } from 'stream';
 import type { Client as SshConnection, ClientChannel } from 'ssh2';
 import SftpClientLib from 'ssh2-sftp-client';
 import {
@@ -9,6 +10,7 @@ import {
 	type RemoteFileEntry,
 } from './RemoteClient';
 import { expandHome } from '../util/localPath';
+import { modeFromRights } from '../util/permissions';
 import { joinRemote, normalizeRemote } from '../util/remotePath';
 
 /** Keeps idle sessions alive through NAT/firewall timeouts instead of failing on the next operation. */
@@ -186,6 +188,7 @@ export class SftpRemoteClient implements RemoteClient {
 						isSymbolicLink,
 						size: entry.size,
 						modifiedAt: entry.modifyTime,
+						permissions: entry.rights ? modeFromRights(entry.rights) : undefined,
 					};
 				})
 			);
@@ -203,6 +206,7 @@ export class SftpRemoteClient implements RemoteClient {
 					isSymbolicLink: info.isSymbolicLink,
 					size: info.size,
 					modifiedAt: info.modifyTime,
+					permissions: typeof info.mode === 'number' ? info.mode & 0o7777 : undefined,
 				};
 			} catch (err) {
 				// Only a genuinely absent path is "no result". Permission and I/O errors must propagate,
@@ -237,10 +241,15 @@ export class SftpRemoteClient implements RemoteClient {
 
 	async copy(fromPath: string, toPath: string): Promise<void> {
 		await this.wrapOp(async () => {
-			// SFTP has no portable server-side copy, so the bytes round-trip through memory. That is still
-			// better than staging a local temp file: no disk writes, no temp-name collisions, no cleanup.
-			const contents = (await this.client.get(fromPath)) as Buffer;
-			await this.client.put(contents, toPath);
+			// SFTP has no portable server-side copy. Piping the read straight into the write means only a
+			// small buffer is in memory at any time, and nothing is staged on the local disk.
+			const pipe = new PassThrough();
+			const reading = this.client.get(fromPath, pipe).catch(err => {
+				// Without this, the write would wait forever for data that is never coming.
+				pipe.destroy(err as Error);
+				throw err;
+			});
+			await Promise.all([reading, this.client.put(pipe, toPath)]);
 		});
 	}
 
@@ -254,5 +263,9 @@ export class SftpRemoteClient implements RemoteClient {
 
 	async rename(fromPath: string, toPath: string): Promise<void> {
 		await this.wrapOp(() => this.client.rename(fromPath, toPath));
+	}
+
+	async chmod(remotePath: string, mode: number): Promise<void> {
+		await this.wrapOp(() => this.client.chmod(remotePath, mode));
 	}
 }

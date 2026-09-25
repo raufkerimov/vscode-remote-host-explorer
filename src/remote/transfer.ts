@@ -5,9 +5,10 @@ import * as path from 'path';
 import * as vscode from 'vscode';
 import { isIgnored, mappingRootForLocalPath, type ServerProfile } from '../config/serverConfig';
 import type { ConnectionManager } from './ConnectionManager';
-import type { RemoteClient } from './RemoteClient';
+import type { RemoteClient, RemoteFileEntry } from './RemoteClient';
 import { rsyncUpload } from './rsyncUpload';
 import { transferLog, type TransferEntry, type TransferEntryStatus } from './transferLog';
+import { changedOnServerSince, knownFileStates, type KnownFileStates } from './remoteState';
 import { joinRemote, toSafeRelativePath } from '../util/remotePath';
 
 export interface TransferSummary {
@@ -16,6 +17,8 @@ export interface TransferSummary {
 	skipped: number;
 	/** Existing local files the user chose not to overwrite during a download. */
 	keptLocal: number;
+	/** Server files changed since the last transfer that the user chose not to overwrite during an upload. */
+	keptRemote?: number;
 }
 
 export type LocalOverwriteDecision = 'overwrite' | 'overwrite-all' | 'skip' | 'skip-all' | 'cancel';
@@ -30,6 +33,14 @@ export interface TransferRun {
 	confirmLocalOverwrite: (label: string) => Promise<LocalOverwriteDecision>;
 	/** Records one file in the Transfers view; absent in tests. */
 	log?: (entry: TransferEntry) => void;
+	/**
+	 * States recorded after earlier transfers. With `confirmRemoteOverwrite`, uploads ask before replacing a
+	 * server file that changed since; both are absent in tests that don't exercise that.
+	 */
+	knownFiles?: KnownFileStates;
+	/** Remembered answer for server files that changed; like `localConflicts`. */
+	remoteConflicts?: 'ask' | 'overwrite' | 'skip';
+	confirmRemoteOverwrite?: (label: string, server: ServerProfile) => Promise<LocalOverwriteDecision>;
 }
 
 /** How a remote path appears in the Transfers view. */
@@ -45,13 +56,24 @@ function logDownload(run: TransferRun, server: ServerProfile, remotePath: string
 	run.log?.({ from: remoteLabel(server, remotePath), to: localPath, status, localPath, error });
 }
 
-export async function promptLocalOverwrite(label: string): Promise<LocalOverwriteDecision> {
-	const choice = await vscode.window.showWarningMessage(
+export function promptLocalOverwrite(label: string): Promise<LocalOverwriteDecision> {
+	return promptOverwrite(
 		`"${label}" already exists on your computer.`,
-		{
-			modal: true,
-			detail: 'Downloading replaces your local copy with the version from the server. Any local changes to it will be lost.',
-		},
+		'Downloading replaces your local copy with the version from the server. Any local changes to it will be lost.'
+	);
+}
+
+export function promptRemoteOverwrite(label: string, server: ServerProfile): Promise<LocalOverwriteDecision> {
+	return promptOverwrite(
+		`"${label}" changed on ${server.name} since you last uploaded or downloaded it.`,
+		'Someone may have edited it on the server. Uploading replaces that newer copy with yours.'
+	);
+}
+
+async function promptOverwrite(message: string, detail: string): Promise<LocalOverwriteDecision> {
+	const choice = await vscode.window.showWarningMessage(
+		message,
+		{ modal: true, detail },
 		'Overwrite',
 		'Overwrite All',
 		'Skip',
@@ -101,6 +123,105 @@ export async function mayWriteLocalFile(run: TransferRun, localPath: string, lab
 		default:
 			throw new CancelledError();
 	}
+}
+
+/**
+ * Decides whether an upload may replace the server's copy. Only a file that changed on the server since
+ * this extension last transferred it needs consent; the answer can apply to the rest of the run.
+ */
+export async function mayOverwriteRemoteFile(
+	run: TransferRun,
+	server: ServerProfile,
+	remotePath: string,
+	current: RemoteFileEntry | undefined,
+	label: string
+): Promise<boolean> {
+	if (!current || current.isDirectory || !run.knownFiles || !run.confirmRemoteOverwrite || run.remoteConflicts === 'overwrite') {
+		return true;
+	}
+	if (!changedOnServerSince(run.knownFiles.get(server.id, remotePath), current, server.protocol)) {
+		return true;
+	}
+	if (run.remoteConflicts === 'skip') {
+		return false;
+	}
+	switch (await run.confirmRemoteOverwrite(label, server)) {
+		case 'overwrite':
+			return true;
+		case 'overwrite-all':
+			run.remoteConflicts = 'overwrite';
+			return true;
+		case 'skip':
+			return false;
+		case 'skip-all':
+			run.remoteConflicts = 'skip';
+			return false;
+		default:
+			throw new CancelledError();
+	}
+}
+
+/** Whether uploads in this run check the server copy first, which costs a listing per folder. */
+function checksRemoteChanges(run: TransferRun): boolean {
+	return Boolean(run.knownFiles && run.confirmRemoteOverwrite && run.remoteConflicts !== 'overwrite');
+}
+
+/** Records both copies' state after a transfer. Never fails the transfer: the record is only a hint. */
+async function recordTransfer(
+	run: TransferRun,
+	server: ServerProfile,
+	client: RemoteClient,
+	remotePath: string,
+	localPath: string,
+	remote?: RemoteFileEntry
+): Promise<void> {
+	if (!run.knownFiles) {
+		return;
+	}
+	try {
+		const [remoteState, localState] = await Promise.all([
+			remote ?? client.stat(remotePath),
+			fs.promises.stat(localPath),
+		]);
+		if (remoteState) {
+			run.knownFiles.set(server.id, remotePath, {
+				remoteModifiedAt: remoteState.modifiedAt,
+				localModifiedAt: localState.mtimeMs,
+				size: remoteState.size,
+			});
+		}
+	} catch {
+		// Without a record the next upload simply doesn't check; nothing else depends on it.
+	}
+}
+
+/**
+ * Records the files a folder upload sent, reading each server folder once. A `stat` per file would cost
+ * a folder listing per file over FTP, which has no stat for arbitrary paths.
+ */
+async function recordFolderUpload(run: TransferRun, server: ServerProfile, client: RemoteClient, sent: readonly PlannedFile[]): Promise<void> {
+	if (!run.knownFiles || sent.length === 0) {
+		return;
+	}
+	const byFolder = new Map<string, PlannedFile[]>();
+	for (const file of sent) {
+		const folder = path.posix.dirname(file.to);
+		byFolder.set(folder, [...(byFolder.get(folder) ?? []), file]);
+	}
+	for (const [folder, files] of byFolder) {
+		const listing = new Map((await client.list(folder).catch(() => [])).map(entry => [entry.path, entry]));
+		for (const file of files) {
+			const entry = listing.get(file.to);
+			if (entry) {
+				await recordTransfer(run, server, client, file.to, file.from, entry);
+			}
+		}
+	}
+}
+
+function keepRemote(run: TransferRun, server: ServerProfile, localPath: string, remotePath: string): void {
+	logUpload(run, server, localPath, remotePath, 'skipped');
+	run.summary.keptRemote = (run.summary.keptRemote ?? 0) + 1;
 }
 
 /** Throw from inside a transfer to stop it quietly; `withTransferProgress` reports it as a cancellation. */
@@ -164,6 +285,8 @@ interface PlannedFile {
 	from: string;
 	to: string;
 	label: string;
+	/** Downloads: the listing entry, recorded as the server's state once the file is fetched. */
+	remote?: RemoteFileEntry;
 }
 
 async function transferPlannedFiles(
@@ -197,7 +320,7 @@ export async function withTransferProgress(
 	title: string,
 	run: (run: TransferRun) => Promise<void>
 ): Promise<TransferSummary | undefined> {
-	const summary: TransferSummary = { transferred: 0, skipped: 0, keptLocal: 0 };
+	const summary: TransferSummary = { transferred: 0, skipped: 0, keptLocal: 0, keptRemote: 0 };
 	const record = transferLog.start(title);
 	try {
 		await vscode.window.withProgress(
@@ -210,6 +333,9 @@ export async function withTransferProgress(
 					localConflicts: 'ask',
 					confirmLocalOverwrite: promptLocalOverwrite,
 					log: entry => transferLog.add(record, entry),
+					knownFiles: knownFileStates,
+					remoteConflicts: 'ask',
+					confirmRemoteOverwrite: promptRemoteOverwrite,
 				})
 		);
 		transferLog.finish(record, 'done');
@@ -252,9 +378,20 @@ export async function uploadPath(
 	if (server.protocol === 'sftp' && server.useRsyncForUpload) {
 		run.progress.report({ message: `rsync ${path.basename(localPath)}` });
 		if (!stats.isDirectory()) {
+			const client = checksRemoteChanges(run) || run.knownFiles ? await connections.getClient(server) : undefined;
+			if (client && checksRemoteChanges(run)) {
+				const current = await client.stat(remotePath);
+				if (!(await mayOverwriteRemoteFile(run, server, remotePath, current, path.basename(localPath)))) {
+					keepRemote(run, server, localPath, remotePath);
+					return;
+				}
+			}
 			await rsyncUpload(server, { localPath, remotePath, isDirectory: false }, outputChannel, run.token);
 			logUpload(run, server, localPath, remotePath, 'done');
 			run.summary.transferred += 1;
+			if (client) {
+				await recordTransfer(run, server, client, remotePath, localPath);
+			}
 			return;
 		}
 
@@ -287,8 +424,23 @@ export async function uploadPath(
 	if (stats.isDirectory()) {
 		const files: PlannedFile[] = [];
 		await planUploadDirectory(server, client, localPath, localPath, remotePath, run, files);
-		await transferPlannedFiles(server, run, 'upload', files, file => client.put(file.from, file.to));
+		const sent: PlannedFile[] = [];
+		try {
+			await transferPlannedFiles(server, run, 'upload', files, async file => {
+				await client.put(file.from, file.to);
+				sent.push(file);
+			});
+		} finally {
+			await recordFolderUpload(run, server, client, sent);
+		}
 	} else {
+		if (checksRemoteChanges(run)) {
+			const current = await client.stat(remotePath);
+			if (!(await mayOverwriteRemoteFile(run, server, remotePath, current, path.basename(localPath)))) {
+				keepRemote(run, server, localPath, remotePath);
+				return;
+			}
+		}
 		run.progress.report({ message: path.basename(localPath) });
 		try {
 			await client.put(localPath, remotePath);
@@ -298,6 +450,7 @@ export async function uploadPath(
 		}
 		logUpload(run, server, localPath, remotePath, 'done');
 		run.summary.transferred += 1;
+		await recordTransfer(run, server, client, remotePath, localPath);
 	}
 }
 
@@ -343,6 +496,10 @@ async function planUploadDirectory(
 ): Promise<void> {
 	throwIfCancelled(run.token);
 	await client.mkdir(remoteDirPath);
+	// One listing per folder answers "did this file change on the server?" for all of its files.
+	const existing = checksRemoteChanges(run)
+		? new Map((await client.list(remoteDirPath).catch(() => [])).map(entry => [entry.name, entry]))
+		: new Map<string, RemoteFileEntry>();
 
 	const items = await fs.promises.readdir(localDirPath, { withFileTypes: true });
 	for (const item of items) {
@@ -360,7 +517,12 @@ async function planUploadDirectory(
 		if (item.isDirectory()) {
 			await planUploadDirectory(server, client, rootLocalPath, childLocalPath, childRemotePath, run, files);
 		} else {
-			files.push({ from: childLocalPath, to: childRemotePath, label: progressLabel(rootLocalPath, childLocalPath) });
+			const label = progressLabel(rootLocalPath, childLocalPath);
+			if (!(await mayOverwriteRemoteFile(run, server, childRemotePath, existing.get(item.name), label))) {
+				keepRemote(run, server, childLocalPath, childRemotePath);
+				continue;
+			}
+			files.push({ from: childLocalPath, to: childRemotePath, label });
 		}
 	}
 }
@@ -376,7 +538,10 @@ export async function downloadPath(
 	if (isDirectory) {
 		const files: PlannedFile[] = [];
 		await planDownloadDirectory(server, client, localPath, remotePath, localPath, run, files);
-		await transferPlannedFiles(server, run, 'download', files, file => client.get(file.from, file.to));
+		await transferPlannedFiles(server, run, 'download', files, async file => {
+			await client.get(file.from, file.to);
+			await recordTransfer(run, server, client, file.from, file.to, file.remote);
+		});
 		return;
 	}
 	if (!(await mayWriteLocalFile(run, localPath, path.basename(localPath)))) {
@@ -394,6 +559,7 @@ export async function downloadPath(
 	}
 	logDownload(run, server, remotePath, localPath, 'done');
 	run.summary.transferred += 1;
+	await recordTransfer(run, server, client, remotePath, localPath);
 }
 
 /**
@@ -440,7 +606,7 @@ async function planDownloadDirectory(
 				run.summary.keptLocal += 1;
 				continue;
 			}
-			files.push({ from: entry.path, to: childLocalPath, label });
+			files.push({ from: entry.path, to: childLocalPath, label, remote: entry });
 		}
 	}
 }

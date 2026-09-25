@@ -16,7 +16,11 @@ workflow in the spirit of PhpStorm's Remote Host tool. Works over **SFTP**, **FT
 - **Upload and download** files and whole folders between your project and the server, including
   **upload on save** and dragging files in from your file manager. Folder transfers over SFTP send
   several files at once.
-- **Compare** a local file with the server's copy side by side.
+- **Compare** a local file with the server's copy side by side, or **sync** a whole folder: see what
+  differs on each side and choose what to upload or download.
+- **Production servers** are shown in red and ask before any file on them changes. Uploads warn when
+  the server's copy changed since you last transferred it.
+- **Upload Git changes** in one go, and see where saving uploads to in the status bar.
 - **SSH terminal**: open a shell on an SFTP server, already in the folder you picked.
 - **Project or global servers**: each project shows only its own servers, unless you make a server
   available everywhere.
@@ -30,7 +34,9 @@ workflow in the spirit of PhpStorm's Remote Host tool. Works over **SFTP**, **FT
 2. Click the **Remote Host Explorer** icon in the Activity Bar, then **Add Server...**.
 3. Fill in the form:
    - **Available in** — *This project only* (default) or *All projects*.
-   - **Protocol** — SFTP, FTPS, or FTP; then the host, port, and username.
+   - **Production server** — tick it for a live site: every change to its files asks first.
+   - **Protocol** — SFTP, FTPS, or FTP; then the host, port, and username. For SFTP, **From SSH
+     Config...** fills these in (and the key) from a host in your `~/.ssh/config`.
    - **Authentication** — a password, or for SFTP a private key file or your SSH agent. The key path
      starts as `~/.ssh/id_rsa`; change it if your key has another name, such as `~/.ssh/id_ed25519`.
    - **Remote root path** — the server folder to show. **Browse...** lets you pick it.
@@ -70,6 +76,11 @@ it matches what your hosting provider or administrator gives you.
   | Delete | `Delete` | `Cmd+Backspace` |
 
 - **Create Backup** makes a timestamped copy next to the file, such as `index_2026-09-13_142501.php`.
+- **Change Permissions...** sets permissions on the selected files and folders, as `644` or
+  `rw-r--r--`. Hover over a file to see its current permissions. Over FTP this works when the server
+  supports `SITE CHMOD`, as most do.
+- **Reveal in Remote Hosts** on a file in the Explorer (or an editor tab) selects its copy in this view,
+  connecting if needed.
 - **Duplicate Server...** on a server opens the form pre-filled with a copy, so you can add the same
   server with different folders. Leave the password blank to reuse the original's; it is only reused
   while the protocol, host, port, and username stay the same.
@@ -96,10 +107,18 @@ on save use only the mapped folders. If mapped folders are nested, the innermost
 - **Upload**: right-click files or folders in the Explorer and choose **Upload to Remote Host**. It is
   greyed out for items outside every mapped local folder.
 - **Several servers for one folder** (for example dev and prod): uploading asks which server to use,
-  every time, so production is never picked by accident. With one server, it uploads right away.
-  **Compare with Remote** asks the same way.
+  every time, from a list that shows where each would put the files. With one server, it uploads
+  right away. **Compare with Remote**, **Sync**, and **Reveal** ask the same way.
 - **Upload on save**: turn on **Auto-upload on save** for the server. If several servers map the file,
-  each one with auto-upload turned on receives it.
+  each one with auto-upload turned on receives it. For a file in a mapped folder, the status bar shows
+  where saving uploads to (for example `dev`) or **Auto-upload off**; click it to choose.
+- **Upload Git changes**: **Upload Git Changes to Remote Host...** in the Source Control view's `…`
+  menu (or the Command Palette) lists every file Git shows as added or modified, lets you untick any,
+  and uploads the rest. Ignore patterns apply; deleted files are not removed from the server.
+- **Changed on the server?** Before an upload replaces a file, the extension checks whether the
+  server's copy changed since it last uploaded or downloaded that file — a hotfix made directly on the
+  server, for example. If so, you choose **Overwrite** or **Skip** (or either for all). Files it has
+  never transferred are uploaded without this check.
 - **Download**: right-click items in the Remote Hosts view and choose **Download to Local** to download
   them into their mapped local folder. It is greyed out for items outside every mapped server folder.
 - **Download anywhere**: choose **Download to Folder...** instead and pick a folder. This works for any
@@ -115,6 +134,28 @@ on save use only the mapped folders. If mapped folders are nested, the innermost
   tab of the bottom panel. Expand one to see each file as `from → to`, including files that were
   ignored, kept, or failed. Click a file to open your local copy. The **Show Transfers** button on a
   finished transfer's notification opens the panel.
+
+### Production servers
+
+Tick **Production server** in the server form for a live site. Its name is shown in red with a **P**,
+and uploading, saving, deleting, moving, renaming, creating files, pasting, and changing permissions on
+it all ask first. For saving and upload on save, you can choose **Continue, Don't Ask Again Until
+Reload**.
+
+### Syncing a folder
+
+Right-click a folder in the Explorer and choose **Sync with Remote Host...**, a folder in the Remote
+Hosts view and choose **Sync with Local Folder...**, or a server and choose **Sync with Server...**. The
+extension compares both sides and lists every file that differs:
+
+- **Upload to the server** — new or changed on your computer (ticked).
+- **Download from the server** — only on the server, or changed there (ticked).
+- **Needs your decision** — changed on both sides, or different and never synced by the extension.
+  Nothing is ticked; pick upload *or* download.
+
+Press Enter to transfer what's ticked. Ignore patterns apply to both sides, and nothing is ever
+deleted. Changes are detected against the extension's own record of each transfer, so files it has
+never transferred are compared by size only.
 
 ### Ignore patterns
 
@@ -192,6 +233,8 @@ saved passwords.
     repository.
 - **Local copies**: files you open from a server are downloaded to VS Code's storage for this
   extension so you can edit them. They stay on your computer until you remove them.
+- **Transfer records**: to notice changes on the server, the extension remembers the size and
+  modification time of files it uploaded or downloaded (never their contents), in its own storage.
 
 ## Settings reference
 
@@ -221,6 +264,7 @@ you type. Each server needs a unique `id`, which its saved password is linked to
 | `mappings` | List of folder mappings, each `{ "localPath": "…", "remotePath": "…" }`. `remotePath` defaults to `remoteRoot`. Needed for uploads and downloads to your project. |
 | `localPath`, `remoteMappedPath` | A single mapping, as saved by earlier versions. Still honoured; saving the server in the form turns it into `mappings`. |
 | `autoUpload` | Upload files inside a mapped local folder when you save them. |
+| `production` | A live server: changes to its files ask for confirmation first, and it is shown in red. |
 | `ignoreGlobs` | Patterns to skip. If omitted, the defaults above apply. Use `[]` to skip nothing. |
 | `useRsyncForUpload` | SFTP only. Upload with `rsync` over SSH. |
 | `rsyncOptions` | Extra `rsync` options, one per line in the form. |
@@ -280,6 +324,24 @@ folder created outside VS Code becomes available about a second later.
 Check that **Auto-upload on save** is on for the server, the file is inside its local folder, and it
 doesn't match an ignore pattern. The Output panel records skipped files.
 
+**"… changed on … since you last uploaded or downloaded it."**
+Someone (or something) changed that file on the server after the extension last transferred it.
+Choose **Skip** to keep the server's copy, then compare it with **Compare with Remote** before
+deciding; or **Overwrite** to upload yours anyway.
+
+**"… is a production server."**
+The server is marked as production, so every change to its files asks first. To stop the questions,
+edit the server and untick **Production server**.
+
+**"… connects through ProxyJump or ProxyCommand, which Remote Host Explorer can't use; the connection
+may fail."**
+The SSH config host reaches the server through a jump host. Connect to the server directly, or use a
+host that doesn't need a jump.
+
+**"The Transfers panel appears after VS Code reloads the window."**
+The extension was just updated and VS Code hasn't loaded the new panel yet. Choose **Reload Window**,
+or restart VS Code.
+
 **"rsync was not found on PATH" or "rsync exited with code …"**
 Install `rsync` (see the table above), or turn off **Use rsync for uploads**. For exit errors, check
 that `ssh` can log in to the server with your key without asking for a password.
@@ -293,17 +355,18 @@ that `ssh` can log in to the server with your key without asking for a password.
 
 ## Known limitations
 
-- A few operations aren't available yet:
-  - Syncing a whole folder.
-  - Changing file permissions.
-  - Copying or moving between two different servers.
-- `~/.ssh/config` host aliases aren't used; enter the host and key file directly. Pageant isn't
-  supported; on Windows use the OpenSSH Authentication Agent.
+- Copying or moving between two different servers isn't supported.
+- Sync never deletes files, on either side. Change Permissions applies to the selected items only, not
+  to what's inside a folder.
+- **From SSH Config...** reads `Host` entries (including `Include`d files) but can't use `ProxyJump`,
+  `ProxyCommand`, or `Match` blocks. Pageant isn't supported; on Windows use the OpenSSH
+  Authentication Agent.
 - Implicit FTPS is only used on port 990.
 - Some FTP servers don't report when a file was modified. With those, the extension can't warn you
-  that a file changed on the server before you save over it.
-- On FTP, browsing waits while a transfer is running.
-- Very large files are held in memory while being copied or backed up on the server.
+  that a file changed on the server before you save over it or upload over it.
+- FTP transfers use a second connection so you can keep browsing. Servers that allow only one
+  connection per user still work, but browsing then waits while a transfer is running.
+- Folder uploads through rsync don't check whether files changed on the server.
 - Rename uses an input box rather than editing the name in place.
 - Items can't be dragged from the Remote Hosts view into VS Code's Explorer, because the Explorer
   doesn't accept drops from other views. Use **Download to Folder...** instead.

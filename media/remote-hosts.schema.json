@@ -98,6 +98,11 @@
             "default": false,
             "description": "Automatically upload files inside a mapped local folder on save."
           },
+          "production": {
+            "type": "boolean",
+            "default": false,
+            "description": "A live server: uploads, deletes, moves, renames, and other changes to its files ask for confirmation first, and it is shown in red."
+          },
           "ignoreGlobs": {
             "type": "array",
             "items": {

@@ -3,6 +3,34 @@
 All notable changes to Remote Host Explorer are documented here.
 This project follows [Semantic Versioning](https://semver.org/).
 
+## [0.1.8] - 2026-09-25
+
+- **Production servers**: tick **Production server** on a live site. It's shown in red, and uploads,
+  saves, deletes, moves, renames, new files, pastes, and permission changes on it ask first.
+- **Changed on the server?** An upload now asks before replacing a file that changed on the server
+  since you last uploaded or downloaded it, for example a hotfix made there.
+- **Sync with Server**: compare a mapped folder with the server, review what's new or changed on each
+  side, and upload or download the files you tick.
+- **Upload Git Changes to Remote Host...** uploads every added or modified file, from the Source
+  Control view or the Command Palette.
+- **Status bar**: for a file in a mapped folder, shows where saving uploads to, and turns auto-upload
+  on or off per server.
+- **Reveal in Remote Hosts** from the Explorer or an editor tab selects the file in the Remote Hosts
+  view.
+- **From SSH Config...** in the server form fills in host, port, user, and key from `~/.ssh/config`.
+- **Change Permissions...** in the Remote Hosts view, for SFTP and for FTP servers that support it.
+  File tooltips show the current permissions.
+- Copying and backing up large files on the server no longer loads them into memory.
+- FTP transfers run on a second connection, so you can keep browsing while a file uploads. Servers
+  that allow only one connection keep working as before.
+- **Show Transfers** now opens the Transfers panel with the transfer you were notified about selected
+  and expanded, and every transfer in the panel can be expanded to its files. It's also available as
+  **Remote Host Explorer: Show Transfers** in the Command Palette.
+- Right after an update, **Show Transfers** offers to reload the window if VS Code hasn't loaded the
+  panel yet, instead of doing nothing.
+- **Browse...** for the remote root and mapping folders lists folders alphabetically. Both it and the
+  Remote Hosts view ignore letter case and sort numbers by value, so `v2` comes before `v10`.
+
 ## [0.1.7] - 2026-09-25
 
 - **Choose the server** when several servers map the same folder (for example dev and prod): Upload to

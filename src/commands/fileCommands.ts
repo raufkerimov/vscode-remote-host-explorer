@@ -5,6 +5,8 @@ import { moveRemoteItems, promptForConflict } from '../remote/moveItems';
 import type { RemoteClient } from '../remote/RemoteClient';
 import { CancelledError, copyRemoteTree, withTransferProgress, type TransferRun } from '../remote/transfer';
 import { notifyTransfer } from '../remote/transferLog';
+import { confirmProductionChange } from '../config/productionGuard';
+import { formatOctal, formatPermissions, parseModeInput } from '../util/permissions';
 import { basenameRemote, dirnameRemote, isSameOrInside, joinRemote, normalizeRemote } from '../util/remotePath';
 import { guarded, resolveSelection, type CommandServices } from './shared';
 
@@ -37,6 +39,12 @@ const validateFileName = nameValidator('file');
 function withNameSuffix(name: string, suffix: string): string {
 	const dotIndex = name.lastIndexOf('.');
 	return dotIndex > 0 ? `${name.slice(0, dotIndex)}${suffix}${name.slice(dotIndex)}` : `${name}${suffix}`;
+}
+
+/** Delete already asks for confirmation, so a production server is called out there instead of asking twice. */
+function productionNote(nodes: readonly FileNode[]): string {
+	const names = [...new Set(nodes.filter(node => node.server.production).map(node => node.server.name))];
+	return names.length > 0 ? `\n\n⚠ ${names.join(', ')} ${names.length === 1 ? 'is a production server' : 'are production servers'}.` : '';
 }
 
 function describeItems(nodes: readonly FileNode[]): string {
@@ -92,6 +100,9 @@ export function registerFileCommands(services: CommandServices): vscode.Disposab
 		const server = target.server;
 		const remoteDirectory = targetDirectoryOf(target);
 		const remotePath = joinRemote(remoteDirectory, name);
+		if (!(await confirmProductionChange(server, `Create the ${kind} ${remotePath}.`))) {
+			return;
+		}
 		const client = await connections.getClient(server);
 
 		// Writing straight over an existing file would silently replace it with an empty one.
@@ -193,6 +204,10 @@ export function registerFileCommands(services: CommandServices): vscode.Disposab
 				if (sources.length === 0) {
 					return;
 				}
+				const verb = clip.mode === 'cut' ? 'Move' : 'Copy';
+				if (!(await confirmProductionChange(server, `${verb} ${sources.length} item(s) into ${targetDir}.`))) {
+					return;
+				}
 				const client = await connections.getClient(server);
 
 				if (clip.mode === 'cut') {
@@ -275,7 +290,8 @@ export function registerFileCommands(services: CommandServices): vscode.Disposab
 							(nodes.length > 1 ? `${describeItems(nodes)}\n\n` : '') +
 							(hasDirectories
 								? 'Folders are deleted together with everything inside them. This cannot be undone.'
-								: 'This cannot be undone.'),
+								: 'This cannot be undone.') +
+							productionNote(nodes),
 					},
 					'Delete'
 				);
@@ -311,6 +327,51 @@ export function registerFileCommands(services: CommandServices): vscode.Disposab
 		),
 
 		vscode.commands.registerCommand(
+			'remoteHostExplorer.changePermissions',
+			guarded('Failed to change permissions', async (clicked?: TreeNode, selected?: TreeNode[]) => {
+				const nodes = selectedFiles(clicked, selected);
+				if (nodes.length === 0) {
+					return;
+				}
+				const current = nodes[0].entry.permissions;
+				const input = await vscode.window.showInputBox({
+					title: nodes.length === 1 ? `Permissions of "${nodes[0].entry.name}"` : `Permissions of ${nodes.length} items`,
+					prompt: 'Octal like 644 or 755, or letters like rw-r--r--.' +
+						(current !== undefined ? ` Currently ${formatPermissions(current)}.` : ''),
+					value: current !== undefined ? formatOctal(current) : '',
+					ignoreFocusOut: true,
+					validateInput: value =>
+						parseModeInput(value) === undefined ? 'Enter three or four octal digits (644) or nine letters (rw-r--r--).' : undefined,
+				});
+				const mode = input === undefined ? undefined : parseModeInput(input);
+				if (mode === undefined) {
+					return;
+				}
+
+				const failures: string[] = [];
+				for (const { server, nodes: serverNodes } of groupByServer(nodes).values()) {
+					if (!(await confirmProductionChange(server, `Change permissions of ${serverNodes.length} item(s) to ${formatOctal(mode)}.`))) {
+						continue;
+					}
+					const client = await connections.getClient(server);
+					for (const node of serverNodes) {
+						try {
+							await client.chmod(node.entry.path, mode);
+						} catch (err) {
+							failures.push(`${node.entry.name}: ${(err as Error).message}`);
+						}
+					}
+					refreshAll(server, serverNodes.map(node => dirnameRemote(node.entry.path)));
+				}
+				if (failures.length > 0) {
+					vscode.window.showErrorMessage(`Could not change permissions of ${failures.length} item(s). ${failures.join('; ')}`);
+				} else {
+					vscode.window.setStatusBarMessage(`Permissions set to ${formatPermissions(mode)} (${formatOctal(mode)})`, 4000);
+				}
+			})
+		),
+
+		vscode.commands.registerCommand(
 			'remoteHostExplorer.renameRemoteItem',
 			guarded('Failed to rename', async (clicked?: TreeNode) => {
 				const node = selectedFiles(clicked, undefined)[0];
@@ -326,6 +387,9 @@ export function registerFileCommands(services: CommandServices): vscode.Disposab
 				});
 				const trimmed = newName?.trim();
 				if (!trimmed || trimmed === node.entry.name) {
+					return;
+				}
+				if (!(await confirmProductionChange(node.server, `Rename "${node.entry.name}" to "${trimmed}".`))) {
 					return;
 				}
 

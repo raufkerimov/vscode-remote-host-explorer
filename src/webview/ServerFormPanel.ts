@@ -11,9 +11,10 @@ import {
 	upsertServerProfile,
 } from '../config/serverConfig';
 import type { SecretsManager } from '../config/secrets';
+import { readSshConfigHosts } from '../config/sshConfig';
 import { buildRemoteClient, defaultPortFor, requireSshAgentSocket } from '../remote/clientFactory';
 import type { HostKeyStore } from '../remote/hostKeys';
-import type { RemoteClient, RemoteConnectionOptions } from '../remote/RemoteClient';
+import { compareEntries, type RemoteClient, type RemoteConnectionOptions } from '../remote/RemoteClient';
 import { dirnameRemote, normalizeRemote } from '../util/remotePath';
 
 /** Transports offered in the form. Only protocols with a working client belong here. */
@@ -42,6 +43,7 @@ export interface SubmittedForm {
 	/** One entry per row; a blank remote path means the remote root. */
 	mappings: { localPath: string; remotePath: string }[];
 	autoUpload: boolean;
+	production: boolean;
 	ignoreGlobs: string;
 	useRsyncForUpload: boolean;
 	rsyncOptions: string;
@@ -54,6 +56,7 @@ type IncomingMessage =
 	| { type: 'browseRemotePath'; payload: SubmittedForm; mappingIndex?: number }
 	| { type: 'testConnection'; payload: SubmittedForm }
 	| { type: 'browsePrivateKey' }
+	| { type: 'importSshConfig' }
 	| { type: 'browseLocalFolder'; mappingIndex: number };
 
 interface PanelContext {
@@ -162,6 +165,10 @@ async function handleMessage(
 			await handleBrowseRemotePath(panel, panelContext, message.payload, message.mappingIndex);
 			return;
 
+		case 'importSshConfig':
+			await handleImportSshConfig(panel);
+			return;
+
 		case 'testConnection':
 			await handleTestConnection(panel, panelContext, message.payload);
 			return;
@@ -170,6 +177,42 @@ async function handleMessage(
 			await handleSubmit(panel, panelContext, onSaved, message.payload);
 			return;
 	}
+}
+
+/** Fills the connection fields from a `Host` alias in the user's `~/.ssh/config`. */
+async function handleImportSshConfig(panel: vscode.WebviewPanel): Promise<void> {
+	const hosts = await readSshConfigHosts();
+	if (hosts.length === 0) {
+		panel.webview.postMessage({ type: 'error', message: 'No hosts were found in ~/.ssh/config.' });
+		return;
+	}
+	const picked = await vscode.window.showQuickPick(
+		hosts.map(host => ({
+			label: host.alias,
+			description: `${host.user ? `${host.user}@` : ''}${host.hostName ?? host.alias}${host.port ? `:${host.port}` : ''}`,
+			detail: host.identityFile ? `Key: ${host.identityFile}` : undefined,
+			host,
+		})),
+		{ placeHolder: 'Choose a host from ~/.ssh/config', matchOnDescription: true }
+	);
+	if (!picked) {
+		return;
+	}
+	const { host } = picked;
+	panel.webview.postMessage({
+		type: 'applySshHost',
+		suggestedName: host.alias,
+		values: {
+			protocol: 'sftp',
+			host: host.hostName ?? host.alias,
+			port: host.port ? String(host.port) : '',
+			...(host.user ? { username: host.user } : {}),
+			...(host.identityFile ? { authMethod: 'key', privateKeyPath: host.identityFile } : {}),
+		},
+		notice: host.usesProxy
+			? `"${host.alias}" connects through ProxyJump or ProxyCommand, which Remote Host Explorer can't use; the connection may fail.`
+			: `Filled in from "${host.alias}" in ~/.ssh/config.`,
+	});
 }
 
 function validate(form: SubmittedForm): string | undefined {
@@ -263,6 +306,7 @@ async function handleSubmit(
 		// Replaces the single `localPath`/`remoteMappedPath` mapping of older versions, which the form showed as a row.
 		mappings: mappings.length > 0 ? mappings : undefined,
 		autoUpload: form.autoUpload,
+		production: form.production || undefined,
 		ignoreGlobs: splitLines(form.ignoreGlobs),
 		useRsyncForUpload: form.protocol === 'sftp' ? form.useRsyncForUpload : false,
 		rsyncOptions: splitLines(form.rsyncOptions),
@@ -426,7 +470,7 @@ async function pickRemoteDirectory(client: RemoteClient, startPath: string): Pro
 	for (;;) {
 		let directories;
 		try {
-			directories = (await client.list(current)).filter(entry => entry.isDirectory);
+			directories = (await client.list(current)).filter(entry => entry.isDirectory).sort(compareEntries);
 		} catch (err) {
 			void vscode.window.showErrorMessage(`Failed to list "${current}": ${(err as Error).message}`);
 			return undefined;
@@ -510,6 +554,7 @@ async function renderForm(
 				? declaredMappings(source).map(mapping => ({ localPath: mapping.localPath, remotePath: mapping.remotePath ?? '' }))
 				: [{ localPath: '', remotePath: '' }],
 			autoUpload: source?.autoUpload ?? false,
+			production: source?.production ?? false,
 			ignoreGlobs: (source?.ignoreGlobs ?? DEFAULT_IGNORE_GLOBS).join('\n'),
 			useRsyncForUpload: source?.useRsyncForUpload ?? false,
 			rsyncOptions: (source?.rsyncOptions ?? []).join('\n'),

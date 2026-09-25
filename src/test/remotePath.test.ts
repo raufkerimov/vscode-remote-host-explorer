@@ -1,5 +1,6 @@
 import * as assert from 'assert';
 import * as path from 'path';
+import { compareEntries, type RemoteFileEntry } from '../remote/RemoteClient';
 import {
 	basenameRemote,
 	dirnameRemote,
@@ -49,5 +50,22 @@ suite('remotePath', () => {
 	test('toSafeRelativePath neutralises characters that are illegal on Windows', () => {
 		assert.strictEqual(toSafeRelativePath('C:/secret'), path.join('C_', 'secret'));
 		assert.strictEqual(toSafeRelativePath('/a/we:ird*name?'), path.join('a', 'we_ird_name_'));
+	});
+});
+
+suite('compareEntries', () => {
+	const entry = (name: string, isDirectory = false): RemoteFileEntry => ({ name, path: `/${name}`, isDirectory, size: 0, modifiedAt: 0 });
+
+	test('lists folders first, then names ignoring case, with numbers compared by value', () => {
+		const sorted = [
+			entry('b.txt'),
+			entry('v10', true),
+			entry('A.txt'),
+			entry('Themes', true),
+			entry('v2', true),
+			entry('a.txt'),
+			entry('.git', true),
+		].sort(compareEntries);
+		assert.deepStrictEqual(sorted.map(item => item.name), ['.git', 'Themes', 'v2', 'v10', 'A.txt', 'a.txt', 'b.txt']);
 	});
 });

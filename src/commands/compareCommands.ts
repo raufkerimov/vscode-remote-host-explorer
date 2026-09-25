@@ -3,7 +3,7 @@ import * as path from 'path';
 import * as vscode from 'vscode';
 import { getServerProfile, localPathForRemote, resolveServersForLocalPath, type ServerProfile } from '../config/serverConfig';
 import type { TreeNode } from '../tree/RemoteTreeProvider';
-import { basenameRemote } from '../util/remotePath';
+import { basenameRemote, isSameOrInside, normalizeRemote } from '../util/remotePath';
 import { guarded, pickServerForLocalFiles, type CommandServices } from './shared';
 
 /** Scheme of the read-only documents that show a server's copy of a file in a diff. */
@@ -39,7 +39,7 @@ async function showDiff(server: ServerProfile, remotePath: string, localUri: vsc
 }
 
 export function registerCompareCommands(services: CommandServices): vscode.Disposable[] {
-	const { connections, treeView } = services;
+	const { connections, treeProvider, treeView } = services;
 
 	const provider: vscode.TextDocumentContentProvider = {
 		async provideTextDocumentContent(uri) {
@@ -55,6 +55,50 @@ export function registerCompareCommands(services: CommandServices): vscode.Dispo
 
 	return [
 		vscode.workspace.registerTextDocumentContentProvider(REMOTE_DOCUMENT_SCHEME, provider),
+
+		// Explorer / editor tab: select a local file's counterpart in the Remote Hosts view.
+		vscode.commands.registerCommand(
+			'remoteHostExplorer.revealInRemoteHosts',
+			guarded('Reveal failed', async (clicked?: vscode.Uri) => {
+				const localUri = clicked instanceof vscode.Uri ? clicked : vscode.window.activeTextEditor?.document.uri;
+				if (localUri?.scheme !== 'file') {
+					return;
+				}
+				const resolutions = resolveServersForLocalPath(localUri.fsPath);
+				if (resolutions.length === 0) {
+					vscode.window.showWarningMessage(
+						'No server mapping found for this file. Add a folder mapping to a server profile first.'
+					);
+					return;
+				}
+				const name = path.basename(localUri.fsPath);
+				const picked = await pickServerForLocalFiles(resolutions, `Reveal "${name}" on which server?`);
+				const resolution = resolutions.find(candidate => candidate.server === picked);
+				if (!resolution) {
+					return;
+				}
+				const { server, remotePath } = resolution;
+				const root = normalizeRemote(server.remoteRoot);
+				if (!isSameOrInside(root, remotePath)) {
+					vscode.window.showWarningMessage(
+						`${remotePath} is outside ${server.name}'s remote root path (${root}), so the view doesn't show it.`
+					);
+					return;
+				}
+				// Revealing is an explicit request, so it may connect; the server then stays open in the view.
+				const client = await connections.getClient(server);
+				const entry = await client.stat(remotePath);
+				if (!entry) {
+					vscode.window.showWarningMessage(`"${name}" isn't on ${server.name} yet (${remotePath}).`);
+					return;
+				}
+				const node =
+					normalizeRemote(remotePath) === root
+						? treeProvider.serverNode(server)
+						: treeProvider.nodeForEntry(server, { ...entry, name: basenameRemote(remotePath), path: normalizeRemote(remotePath) });
+				await treeView.reveal(node, { select: true, focus: true, expand: entry.isDirectory });
+			})
+		),
 
 		// Explorer / editor: compare a local file with its counterpart on the mapped server.
 		vscode.commands.registerCommand(
@@ -75,7 +119,7 @@ export function registerCompareCommands(services: CommandServices): vscode.Dispo
 					vscode.window.showWarningMessage('Compare works on files, not folders.');
 					return;
 				}
-				const server = await pickServerForLocalFiles(resolutions, 'Compare with which server?');
+				const server = await pickServerForLocalFiles(resolutions, `Compare "${path.basename(localUri.fsPath)}" with which server?`);
 				const resolution = resolutions.find(candidate => candidate.server === server);
 				if (!resolution) {
 					return;

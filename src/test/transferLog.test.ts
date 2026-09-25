@@ -2,7 +2,7 @@ import * as assert from 'assert';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
-import type * as vscode from 'vscode';
+import * as vscode from 'vscode';
 import { resolveServersForLocalPathIn, type ServerProfile } from '../config/serverConfig';
 import type { ConnectionManager } from '../remote/ConnectionManager';
 import type { RemoteClient, RemoteFileEntry } from '../remote/RemoteClient';
@@ -10,7 +10,7 @@ import { downloadPath, type TransferRun } from '../remote/transfer';
 import { MAX_TRANSFER_RECORDS, TransferLog, type TransferEntry } from '../remote/transferLog';
 import type { RemoteFileCache } from '../editing/RemoteFileCache';
 import { RemoteTreeProvider, type TreeNode } from '../tree/RemoteTreeProvider';
-import { describeRecord } from '../tree/TransferLogProvider';
+import { describeRecord, TransferLogProvider } from '../tree/TransferLogProvider';
 
 function local(...segments: string[]): string {
 	return path.resolve(path.sep, ...segments);
@@ -56,6 +56,29 @@ suite('TransferLog', () => {
 		assert.deepStrictEqual(log.records.map(record => record.id), [second.id, first.id]);
 		assert.strictEqual(first.entries.length, 1);
 		assert.strictEqual(second.state, 'running');
+	});
+
+	test('remembers which transfer finished last, until it is cleared', () => {
+		const log = new TransferLog();
+		const first = log.start('first');
+		const second = log.start('second');
+		log.finish(second, 'done');
+		log.finish(first, 'cancelled');
+		assert.strictEqual(log.lastFinished, first);
+		log.clear();
+		assert.strictEqual(log.lastFinished, undefined);
+	});
+
+	test('the view can find each file\'s transfer and always lets a transfer expand', () => {
+		const log = new TransferLog();
+		const record = log.start('Uploading');
+		const provider = new TransferLogProvider(log);
+		assert.strictEqual(provider.getTreeItem(record).collapsibleState, vscode.TreeItemCollapsibleState.Collapsed);
+		const entry: TransferEntry = { from: 'a', to: 'b', status: 'done' };
+		log.add(record, entry);
+		assert.strictEqual(provider.getParent(entry), record);
+		assert.strictEqual(provider.getParent(record), undefined);
+		provider.dispose();
 	});
 
 	test('clearing keeps transfers that are still running', () => {

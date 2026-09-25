@@ -78,13 +78,16 @@ remote-host-explorer/
 │   │   ├── shared.ts         # CommandServices, clipboard, `resolveSelection`, `guarded()`, server picker
 │   │   ├── serverCommands.ts # add/edit/duplicate/remove/test/connect/disconnect/SSH terminal
 │   │   ├── fileCommands.ts   # open/new file+folder/rename/delete/copy/cut/paste/backup/copy-path
-│   │   ├── compareCommands.ts # Compare with Remote/Local via a read-only content provider
-│   │   └── transferCommands.ts # upload/download (tree + Explorer, multi-select) + auto-upload-on-save
+│   │   ├── compareCommands.ts # Compare with Remote/Local (read-only content provider), Reveal in Remote Hosts
+│   │   ├── syncCommands.ts   # Sync a mapped folder: compare, review in a multi-select list, transfer
+│   │   └── transferCommands.ts # upload/download (tree + Explorer, multi-select), Git changes, auto-upload-on-save
 │   ├── config/
 │   │   ├── serverConfig.ts   # ServerProfile, project/global scoped storage, legacy settings migration
 │   │   ├── projectServerFile.ts # `.vscode/remote-hosts.json` parsing (JSONC) + watched in-memory store
 │   │   ├── legacyState.ts    # Moves 0.1.0 `remoteHostViewer.*` globalState keys on activation
 │   │   ├── mappedFolderIndex.ts # Lists mapped local folders into a context key (Explorer upload enablement)
+│   │   ├── productionGuard.ts # `confirmProductionChange` + red decoration for production server rows
+│   │   ├── sshConfig.ts      # `~/.ssh/config` parser (Host blocks, Include) for the form's import
 │   │   └── secrets.ts        # SecretStorage wrapper for passwords & key passphrases
 │   ├── remote/
 │   │   ├── RemoteClient.ts   # RemoteClient interface, file entry types, error predicates
@@ -96,17 +99,21 @@ remote-host-explorer/
 │   │   ├── hostKeys.ts       # Trust-on-first-use SSH host key store
 │   │   ├── transfer.ts       # Recursive upload/download/copy: plan, then parallel transfer
 │   │   ├── transferLog.ts    # In-memory per-file transfer history + `notifyTransfer` (Show Transfers)
+│   │   ├── remoteState.ts    # `knownFileStates`: each file's state after our last transfer (globalState)
+│   │   ├── sync.ts           # `compareFolders` / `classifySyncItem` for Sync
 │   │   ├── sshTerminal.ts    # Pseudoterminal over an ssh2 exec channel on the pooled connection
 │   │   └── rsyncUpload.ts    # rsync-over-ssh uploads (argument construction is unit tested)
 │   ├── tree/
 │   │   ├── RemoteTreeProvider.ts # TreeDataProvider + drag/drop; caches node identity
 │   │   └── TransferLogProvider.ts # The Transfers panel view (bottom panel)
 │   ├── editing/
-│   │   └── RemoteFileCache.ts # Local cache, persisted tracking, save-listener re-uploader
+│   │   ├── RemoteFileCache.ts # Local cache, persisted tracking, save-listener re-uploader
+│   │   └── autoUploadStatus.ts # Status bar item: auto-upload targets of the active file, toggle
 │   ├── util/
 │   │   ├── localPath.ts      # Local path normalisation + case-aware containment
 │   │   ├── remotePath.ts     # POSIX remote path helpers + cache path sanitiser
-│   │   └── glob.ts           # Minimal glob matcher for ignoreGlobs
+│   │   ├── glob.ts           # Minimal glob matcher for ignoreGlobs
+│   │   └── permissions.ts    # Octal/`rwx` formatting and parsing for Change Permissions
 │   ├── webview/
 │   │   └── ServerFormPanel.ts # Webview host for the server form (no markup in TS)
 │   └── test/                 # Mocha suites (pure logic + an activation smoke test)
@@ -142,6 +149,12 @@ remote-host-explorer/
   enqueues behind itself and deadlocks.
 - FTP commands like `ensureDir`/`cd` change the server working directory, so FTP paths are resolved
   against the login directory captured at connect (`resolve()`), never the current one.
+- FTP file contents (`get`/`put`/`copy`) go through `runTransfer()`: a second control connection with its
+  own queue, so listings don't wait behind transfers. If the server refuses a second connection
+  (per-user limits on shared hosts), `singleConnectionOnly` routes transfers through `run()` instead.
+  The same no-reentrancy rule applies to both queues.
+- `copy` never buffers a whole file: SFTP pipes `get` into `put` through a `PassThrough` (destroying the
+  pipe if the read fails, or the write hangs); FTP stages through a temp file on the transfer connection.
 - Host keys, private keys, and rsync are SFTP-only; guard those paths with `protocol === 'sftp'`.
 
 ### 2. Secrets & Credentials Security
@@ -167,6 +180,16 @@ remote-host-explorer/
   old value. `remoteHostViewer.servers` stays registered (deprecated) because VS Code refuses to update
   an unregistered setting. 0.1.0 secrets move lazily in `SecretsManager`; globalState in `legacyState.ts`.
 - `media/remote-hosts.schema.json` duplicates the setting's `items` schema; a test asserts they match.
+
+### 2a. Production Servers
+- `production: true` profiles must be guarded: every action that changes server files calls
+  `confirmProductionChange(server, action)` first (uploads, drops, moves, renames, new items, paste,
+  chmod, sync/Git uploads). Saves and auto-upload pass `{ repeated: true }`, which may be waived until
+  reload; explicit actions always ask. Delete already confirms, so it adds `productionNote` to that
+  dialog instead of a second one. Picking the server from `pickServerForLocalFiles` does not count as
+  confirmation; the guard still runs afterwards.
+- Server rows set `resourceUri = serverRowUri(server)` so `ProductionDecorationProvider` can colour them;
+  the URI's query changes with the flag so VS Code re-queries the decoration.
 
 ### 3. SSH Host Keys
 - Every pooled connection passes a `hostKeyPolicy` built by `HostKeyStore.policyFor()` (trust on first
@@ -246,8 +269,18 @@ remote-host-explorer/
   `logDownload` in `transfer.ts`); transfers outside it (saving an opened remote file) write to
   `transferLog` directly. Show completion messages with `notifyTransfer` so they offer Show Transfers.
 - Several profiles may map the same local folder (dev/prod). Explicit actions resolve every candidate
-  with `resolveServersForLocalPath` and ask via `pickServerForLocalFiles` (never remembered, so prod is
-  always a deliberate choice); auto-upload goes to every candidate with `autoUpload`.
+  with `resolveServersForLocalPath` and ask via `pickServerForLocalFiles`, a QuickPick (a dialog with a
+  button per server was tried and rejected: it doesn't scale to many servers); never remembered, so prod
+  is always a deliberate choice. Auto-upload goes to every candidate with `autoUpload`.
+- **Uploads never overwrite a server change silently.** `knownFileStates` records each file's remote
+  mtime/size and local mtime after every upload/download (`recordTransfer`). Before replacing a file,
+  uploads call `mayOverwriteRemoteFile`, which asks only when the server copy changed since that record
+  (`changedOnServerSince`, with a per-protocol timestamp tolerance). Folder uploads get the server state
+  from one listing per folder during planning. Comparing server and local timestamps directly is wrong:
+  servers stamp uploads with their own clock. Flows that already confirmed replacement (tree drops,
+  reviewed sync) set `run.remoteConflicts = 'overwrite'`. rsync folder uploads are not checked.
+- Sync (`remote/sync.ts`) classifies files against the same records; files never transferred compare by
+  size only. It never deletes.
   `resolveServerForLocalPath` (deepest mapping, first profile on a tie) is only for yes/no checks.
 - Folder transfers are two-phase: a sequential **plan** (create directories, apply ignore patterns, ask
   every overwrite question) and then `runWithLimit` over the planned files — `SFTP_PARALLEL_TRANSFERS`

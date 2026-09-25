@@ -25,6 +25,7 @@ function formFor(overrides: Partial<SubmittedForm> = {}): SubmittedForm {
 		remoteRoot: '/var/www/site/wp-content/themes/other',
 		mappings: [],
 		autoUpload: false,
+		production: false,
 		ignoreGlobs: '',
 		useRsyncForUpload: false,
 		rsyncOptions: '',

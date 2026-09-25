@@ -1,4 +1,8 @@
 import { Client as BasicFtpClient, FileType, type FileInfo } from 'basic-ftp';
+import * as crypto from 'crypto';
+import * as fs from 'fs';
+import * as os from 'os';
+import * as path from 'path';
 import { Readable, Writable } from 'stream';
 import {
 	isConnectionLostError,
@@ -6,6 +10,7 @@ import {
 	type RemoteConnectionOptions,
 	type RemoteFileEntry,
 } from './RemoteClient';
+import { formatOctal } from '../util/permissions';
 import { basenameRemote, dirnameRemote, joinRemote, normalizeRemote } from '../util/remotePath';
 
 export const DEFAULT_FTP_PORT = 21;
@@ -34,9 +39,12 @@ function isFtpFileUnavailable(error: unknown): boolean {
 /**
  * FTP / FTPS (explicit or implicit TLS) client backed by `basic-ftp`.
  *
- * Two properties of FTP drive the design:
+ * Three properties of FTP drive the design:
  * - A control connection runs exactly one command at a time; `basic-ftp` throws if a second task starts.
- *   The tree lists folders while uploads are running, so every operation goes through a serial queue.
+ *   Every operation therefore goes through a serial queue.
+ * - So that browsing isn't stuck behind a long transfer, file contents move over a second connection
+ *   with its own queue (`runTransfer`). Many shared hosts limit connections per user; when the second
+ *   one is refused, transfers share the first.
  * - Some commands (`ensureDir`, `cd`) change the server-side working directory. Relative paths are
  *   therefore resolved against the directory the server put us in at login, never against the current one.
  */
@@ -45,6 +53,10 @@ export class FtpRemoteClient implements RemoteClient {
 	private connected = false;
 	private homeDir = '/';
 	private queue: Promise<unknown> = Promise.resolve();
+	private transferClient: BasicFtpClient | undefined;
+	private transferQueue: Promise<unknown> = Promise.resolve();
+	/** Set once the server refused a second connection; transfers then use the main queue. */
+	private singleConnectionOnly = false;
 
 	constructor(
 		private readonly options: RemoteConnectionOptions,
@@ -88,21 +100,80 @@ export class FtpRemoteClient implements RemoteClient {
 		return task;
 	}
 
+	private accessOptions() {
+		return {
+			host: this.options.host,
+			port: this.options.port ?? DEFAULT_FTP_PORT,
+			user: this.options.username,
+			password: this.options.password,
+			// Certificate verification stays on for both TLS modes: a self-signed certificate is rejected
+			// rather than silently trusted.
+			secure: this.secure,
+		};
+	}
+
+	/** The transfer connection, opened on first use; `undefined` when the server won't allow a second one. */
+	private async openTransferClient(): Promise<BasicFtpClient | undefined> {
+		if (this.transferClient && !this.transferClient.closed) {
+			return this.transferClient;
+		}
+		if (this.singleConnectionOnly) {
+			return undefined;
+		}
+		const client = new BasicFtpClient(TIMEOUT_MS);
+		try {
+			await client.access(this.accessOptions());
+			this.transferClient = client;
+			return client;
+		} catch {
+			client.close();
+			this.singleConnectionOnly = true;
+			return undefined;
+		}
+	}
+
+	/**
+	 * Like `run`, for moving file contents: on the transfer connection when there is one, so listings on
+	 * the main connection don't wait for it. The same rule applies — use only the given `client`.
+	 */
+	private runTransfer<T>(operation: (client: BasicFtpClient) => Promise<T>): Promise<T> {
+		const task = this.transferQueue.then(async () => {
+			if (!this.isConnected()) {
+				this.markClosed();
+				throw new Error('Not connected to the FTP server.');
+			}
+			const client = await this.openTransferClient();
+			if (!client) {
+				return this.run(operation);
+			}
+			try {
+				return await operation(client);
+			} catch (err) {
+				if (client.closed) {
+					// Reopened on the next transfer; the main connection is unaffected.
+					this.transferClient = undefined;
+				}
+				throw err;
+			}
+		});
+		this.transferQueue = task.catch(() => undefined);
+		return task;
+	}
+
+	private closeTransferClient(): void {
+		this.transferClient?.close();
+		this.transferClient = undefined;
+	}
+
 	async connect(): Promise<void> {
 		this.connected = false;
 		this.client.close();
+		this.closeTransferClient();
+		this.singleConnectionOnly = false;
 		this.client = new BasicFtpClient(TIMEOUT_MS);
 
 		try {
-			await this.client.access({
-				host: this.options.host,
-				port: this.options.port ?? DEFAULT_FTP_PORT,
-				user: this.options.username,
-				password: this.options.password,
-				// Certificate verification stays on for both TLS modes: a self-signed certificate is rejected
-				// rather than silently trusted.
-				secure: this.secure,
-			});
+			await this.client.access(this.accessOptions());
 			this.homeDir = normalizeRemote(await this.client.pwd()) || '/';
 		} catch (err) {
 			this.client.close();
@@ -116,6 +187,7 @@ export class FtpRemoteClient implements RemoteClient {
 		// An explicit disconnect is not a dropped connection, so `onClose` is intentionally not fired.
 		this.connected = false;
 		this.client.close();
+		this.closeTransferClient();
 	}
 
 	isConnected(): boolean {
@@ -131,6 +203,9 @@ export class FtpRemoteClient implements RemoteClient {
 			isSymbolicLink: info.type === FileType.SymbolicLink,
 			size: info.size,
 			modifiedAt: info.modifiedAt?.getTime() ?? 0,
+			permissions: info.permissions
+				? (info.permissions.user << 6) | (info.permissions.group << 3) | info.permissions.world
+				: undefined,
 		};
 	}
 
@@ -209,7 +284,7 @@ export class FtpRemoteClient implements RemoteClient {
 	}
 
 	async get(remotePath: string, localPath: string): Promise<void> {
-		await this.run(client => client.downloadTo(localPath, this.resolve(remotePath)));
+		await this.runTransfer(client => client.downloadTo(localPath, this.resolve(remotePath)));
 	}
 
 	async readFile(remotePath: string): Promise<Buffer> {
@@ -229,7 +304,7 @@ export class FtpRemoteClient implements RemoteClient {
 	}
 
 	async put(localPath: string, remotePath: string): Promise<void> {
-		await this.run(client => client.uploadFrom(localPath, this.resolve(remotePath)));
+		await this.runTransfer(client => client.uploadFrom(localPath, this.resolve(remotePath)));
 	}
 
 	async writeFile(remotePath: string, contents: Buffer): Promise<void> {
@@ -237,10 +312,16 @@ export class FtpRemoteClient implements RemoteClient {
 	}
 
 	async copy(fromPath: string, toPath: string): Promise<void> {
-		await this.run(async client => {
-			// FTP has no server-side copy; the bytes round-trip through memory on the same connection.
-			const contents = await this.readWith(client, fromPath);
-			await client.uploadFrom(Readable.from(contents), this.resolve(toPath));
+		await this.runTransfer(async client => {
+			// FTP has no server-side copy, and one connection can't download and upload at the same time.
+			// A temporary file keeps a large file out of memory.
+			const staging = path.join(os.tmpdir(), `remote-host-explorer-copy-${crypto.randomUUID()}`);
+			try {
+				await client.downloadTo(staging, this.resolve(fromPath));
+				await client.uploadFrom(staging, this.resolve(toPath));
+			} finally {
+				await fs.promises.rm(staging, { force: true });
+			}
 		});
 	}
 
@@ -261,5 +342,10 @@ export class FtpRemoteClient implements RemoteClient {
 
 	async rename(fromPath: string, toPath: string): Promise<void> {
 		await this.run(client => client.rename(this.resolve(fromPath), this.resolve(toPath)));
+	}
+
+	async chmod(remotePath: string, mode: number): Promise<void> {
+		// Not part of the FTP standard; servers that lack it answer with an error, which is shown as is.
+		await this.run(client => client.send(`SITE CHMOD ${formatOctal(mode)} ${this.resolve(remotePath)}`));
 	}
 }

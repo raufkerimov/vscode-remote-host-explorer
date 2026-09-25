@@ -7,6 +7,7 @@ import type { RemoteFileEntry } from '../remote/RemoteClient';
 import { rsyncUpload } from '../remote/rsyncUpload';
 import { remoteLabel } from '../remote/transfer';
 import { transferLog } from '../remote/transferLog';
+import { confirmProductionChange } from '../config/productionGuard';
 import { isSameOrInside, normalizeRemote, toSafeRelativePath } from '../util/remotePath';
 
 const STATE_KEY = 'remoteHostExplorer.trackedRemoteFiles';
@@ -131,6 +132,10 @@ export class RemoteFileCache {
 			return;
 		}
 
+		if (!(await confirmProductionChange(server, `Save ${tracked.remotePath}.`, { repeated: true }))) {
+			vscode.window.showInformationMessage(`"${path.basename(cachePath)}" was saved locally but not uploaded to ${server.name}.`);
+			return;
+		}
 		const client = await this.connections.getClient(server);
 		const current = await client.stat(tracked.remotePath);
 

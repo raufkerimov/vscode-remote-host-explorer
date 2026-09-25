@@ -121,7 +121,8 @@ button.secondary {
 	display: block;
 }
 
-label.hidden {
+label.hidden,
+button.hidden {
 	display: none;
 }
 

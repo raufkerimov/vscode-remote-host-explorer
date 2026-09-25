@@ -79,8 +79,9 @@ export async function pickServer(): Promise<ServerProfile | undefined> {
 
 /**
  * Chooses the server for local files that several profiles map (dev and prod on one folder). One
- * candidate is used directly; with more, the user picks, and nothing is remembered, so an upload to
- * production is always a deliberate choice. `resolutions` holds every mapping of every file.
+ * candidate is used directly; with more, the user picks from a list showing where each would put the
+ * files. Nothing is remembered, so using production is always a deliberate choice. `resolutions` holds
+ * every mapping of every file.
  */
 export async function pickServerForLocalFiles(
 	resolutions: readonly LocalPathResolution[],
@@ -97,11 +98,11 @@ export async function pickServerForLocalFiles(
 	const picked = await vscode.window.showQuickPick(
 		choices.map(([first, ...rest]) => ({
 			label: first.server.name,
-			description: `${first.server.protocol}://${first.server.host}`,
+			description: `${first.server.protocol}://${first.server.host}${first.server.production ? ' · production' : ''}`,
 			detail: `→ ${first.remotePath}${rest.length > 0 ? ` and ${rest.length} more` : ''}`,
 			server: first.server,
 		})),
-		{ placeHolder }
+		{ placeHolder, matchOnDescription: true }
 	);
 	return picked?.server;
 }

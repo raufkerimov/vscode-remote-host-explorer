@@ -3,7 +3,7 @@
   "displayName": "Remote Host Explorer",
   "description": "A fast and lightweight PhpStorm-style Remote Host manager for VS Code. Features a friendly GUI for server configuration, background upload-on-save, and direct remote file management over SFTP, FTPS, and FTP.",
   "icon": "media/icon.png",
-  "version": "0.1.7",
+  "version": "0.1.8",
   "license": "MIT",
   "publisher": "raufkerimov",
   "author": {
@@ -134,6 +134,11 @@
         "icon": "$(terminal)"
       },
       {
+        "command": "remoteHostExplorer.showTransfers",
+        "title": "Show Transfers",
+        "category": "Remote Host Explorer"
+      },
+      {
         "command": "remoteHostExplorer.clearTransfers",
         "title": "Clear Transfers",
         "category": "Remote Host Explorer",
@@ -158,9 +163,26 @@
         "enablement": "resourceScheme == file && (remoteHostExplorer.mappedFoldersIncomplete || resourcePath in remoteHostExplorer.mappedFolders || resourceDirname in remoteHostExplorer.mappedFolders)"
       },
       {
+        "command": "remoteHostExplorer.uploadGitChanges",
+        "title": "Upload Git Changes to Remote Host...",
+        "category": "Remote Host Explorer",
+        "icon": "$(cloud-upload)"
+      },
+      {
+        "command": "remoteHostExplorer.toggleAutoUpload",
+        "title": "Choose Auto-Upload Servers...",
+        "category": "Remote Host Explorer"
+      },
+      {
         "command": "remoteHostExplorer.compareWithRemote",
         "title": "Compare with Remote",
         "category": "Remote Host Explorer"
+      },
+      {
+        "command": "remoteHostExplorer.revealInRemoteHosts",
+        "title": "Reveal in Remote Hosts",
+        "category": "Remote Host Explorer",
+        "enablement": "resourceScheme == file && (remoteHostExplorer.mappedFoldersIncomplete || resourcePath in remoteHostExplorer.mappedFolders || resourceDirname in remoteHostExplorer.mappedFolders)"
       },
       {
         "command": "remoteHostExplorer.newFile",
@@ -182,6 +204,11 @@
       {
         "command": "remoteHostExplorer.renameRemoteItem",
         "title": "Rename...",
+        "category": "Remote Host Explorer"
+      },
+      {
+        "command": "remoteHostExplorer.changePermissions",
+        "title": "Change Permissions...",
         "category": "Remote Host Explorer"
       },
       {
@@ -219,6 +246,24 @@
         "command": "remoteHostExplorer.downloadRemoteItemTo",
         "title": "Download to Folder...",
         "category": "Remote Host Explorer"
+      },
+      {
+        "command": "remoteHostExplorer.syncWithServer",
+        "title": "Sync with Remote Host...",
+        "category": "Remote Host Explorer",
+        "enablement": "resourceScheme == file && (remoteHostExplorer.mappedFoldersIncomplete || resourcePath in remoteHostExplorer.mappedFolders || resourceDirname in remoteHostExplorer.mappedFolders)"
+      },
+      {
+        "command": "remoteHostExplorer.syncRemoteFolder",
+        "title": "Sync with Local Folder...",
+        "category": "Remote Host Explorer",
+        "enablement": "viewItem =~ /\\.mapped$/"
+      },
+      {
+        "command": "remoteHostExplorer.syncServer",
+        "title": "Sync with Server...",
+        "category": "Remote Host Explorer",
+        "icon": "$(sync)"
       },
       {
         "command": "remoteHostExplorer.compareRemoteItem",
@@ -314,6 +359,30 @@
         {
           "command": "remoteHostExplorer.compareWithRemote",
           "when": "remoteHostExplorer.activeEditorMapped"
+        },
+        {
+          "command": "remoteHostExplorer.syncWithServer",
+          "when": "false"
+        },
+        {
+          "command": "remoteHostExplorer.syncRemoteFolder",
+          "when": "false"
+        },
+        {
+          "command": "remoteHostExplorer.uploadGitChanges",
+          "when": "remoteHostExplorer.hasMappings"
+        },
+        {
+          "command": "remoteHostExplorer.toggleAutoUpload",
+          "when": "remoteHostExplorer.activeEditorMapped"
+        },
+        {
+          "command": "remoteHostExplorer.revealInRemoteHosts",
+          "when": "false"
+        },
+        {
+          "command": "remoteHostExplorer.changePermissions",
+          "when": "false"
         }
       ],
       "view/title": [
@@ -453,6 +522,21 @@
           "command": "remoteHostExplorer.openSshTerminal",
           "when": "view == remoteHostExplorer.servers && !listMultiSelection && viewItem =~ /^remoteHostExplorer\\.directory\\.sftp\\./",
           "group": "4_terminal@1"
+        },
+        {
+          "command": "remoteHostExplorer.syncRemoteFolder",
+          "when": "view == remoteHostExplorer.servers && !listMultiSelection && viewItem =~ /^remoteHostExplorer\\.directory\\./",
+          "group": "2_transfer@5"
+        },
+        {
+          "command": "remoteHostExplorer.syncServer",
+          "when": "view == remoteHostExplorer.servers && viewItem =~ /^remoteHostExplorer\\.server\\./",
+          "group": "1_connection@5"
+        },
+        {
+          "command": "remoteHostExplorer.changePermissions",
+          "when": "view == remoteHostExplorer.servers && viewItem =~ /^remoteHostExplorer\\.(file|directory)\\./",
+          "group": "3_ops@7"
         }
       ],
       "explorer/context": [
@@ -465,12 +549,34 @@
           "command": "remoteHostExplorer.compareWithRemote",
           "when": "remoteHostExplorer.hasMappings && !explorerResourceIsFolder",
           "group": "remoteHostExplorer"
+        },
+        {
+          "command": "remoteHostExplorer.syncWithServer",
+          "when": "remoteHostExplorer.hasMappings && resourceScheme == file && explorerResourceIsFolder",
+          "group": "remoteHostExplorer"
+        },
+        {
+          "command": "remoteHostExplorer.revealInRemoteHosts",
+          "when": "remoteHostExplorer.hasMappings && resourceScheme == file",
+          "group": "remoteHostExplorer"
         }
       ],
       "editor/title/context": [
         {
           "command": "remoteHostExplorer.compareWithRemote",
           "when": "remoteHostExplorer.activeEditorMapped",
+          "group": "remoteHostExplorer"
+        },
+        {
+          "command": "remoteHostExplorer.revealInRemoteHosts",
+          "when": "remoteHostExplorer.hasMappings && resourceScheme == file",
+          "group": "remoteHostExplorer"
+        }
+      ],
+      "scm/title": [
+        {
+          "command": "remoteHostExplorer.uploadGitChanges",
+          "when": "scmProvider == git && remoteHostExplorer.hasMappings",
           "group": "remoteHostExplorer"
         }
       ]
@@ -572,6 +678,11 @@
                 "type": "boolean",
                 "default": false,
                 "description": "Automatically upload files inside a mapped local folder on save."
+              },
+              "production": {
+                "type": "boolean",
+                "default": false,
+                "description": "A live server: uploads, deletes, moves, renames, and other changes to its files ask for confirmation first, and it is shown in red."
               },
               "ignoreGlobs": {
                 "type": "array",

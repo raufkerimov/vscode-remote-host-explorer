@@ -11,9 +11,11 @@ import {
 import type { RemoteFileCache } from '../editing/RemoteFileCache';
 import type { ConnectionManager } from '../remote/ConnectionManager';
 import { moveRemoteItems, promptForConflict } from '../remote/moveItems';
-import type { RemoteFileEntry } from '../remote/RemoteClient';
+import { compareEntries, type RemoteFileEntry } from '../remote/RemoteClient';
 import { CancelledError, uploadPath, withTransferProgress } from '../remote/transfer';
 import { notifyTransfer } from '../remote/transferLog';
+import { confirmProductionChange, serverRowUri } from '../config/productionGuard';
+import { formatOctal, formatPermissions } from '../util/permissions';
 import { basenameRemote, dirnameRemote, isSameOrInside, joinRemote, normalizeRemote } from '../util/remotePath';
 
 export const REMOTE_TREE_MIME = 'application/vnd.code.tree.remotehostexplorer';
@@ -113,6 +115,11 @@ export class RemoteTreeProvider implements vscode.TreeDataProvider<TreeNode>, vs
 		return created;
 	}
 
+	/** The row for a server entry, for `TreeView.reveal`; reuses the cached instance VS Code already knows. */
+	nodeForEntry(server: ServerProfile, entry: RemoteFileEntry): FileNode {
+		return this.fileNode(server, entry);
+	}
+
 	/** Full reload. Prefer {@link refreshDirectory} so unrelated expanded folders are not re-listed. */
 	refresh(): void {
 		this.fileNodes.clear();
@@ -189,18 +196,21 @@ export class RemoteTreeProvider implements vscode.TreeDataProvider<TreeNode>, vs
 			);
 			item.contextValue = serverContextValue(node.server, inSession);
 			item.id = `server:${node.server.id}`;
+			// Lets ProductionDecorationProvider colour a production server's name.
+			item.resourceUri = serverRowUri(node.server);
 			item.iconPath = new vscode.ThemeIcon(
 				inSession ? 'circle-filled' : 'circle-outline',
 				new vscode.ThemeColor(connected ? 'charts.green' : inSession ? 'charts.yellow' : 'disabledForeground')
 			);
 			const state = connected ? 'connected' : inSession ? 'connection lost, reconnects when used' : 'not connected';
 			// Global servers are the ones that appear in every window, so they are labelled as such.
-			const scopeLabel = node.scope === 'global' ? ' · global' : '';
+			const scopeLabel = (node.scope === 'global' ? ' · global' : '') + (node.server.production ? ' · production' : '');
 			const mappings = folderMappings(node.server);
 			item.description = `${node.server.protocol}://${node.server.host} - ${state}${scopeLabel}`;
 			item.tooltip =
 				`${node.server.name}\n${node.server.protocol}://${node.server.host}\nRoot: ${node.server.remoteRoot}\n` +
 				(node.scope === 'project' ? 'Available in this project only' : 'Available in all projects') +
+				(node.server.production ? '\nProduction server: changes ask for confirmation' : '') +
 				(mappings.length > 0
 					? mappings.map(mapping => `\nLocal folder: ${mapping.localPath} ↔ ${mapping.remotePath}`).join('')
 					: '\nNo local folder mapped');
@@ -214,7 +224,11 @@ export class RemoteTreeProvider implements vscode.TreeDataProvider<TreeNode>, vs
 		item.id = `file:${node.server.id}:${node.entry.path}`;
 		item.contextValue = fileContextValue(node.entry, node.server);
 		item.iconPath = node.entry.isDirectory ? vscode.ThemeIcon.Folder : vscode.ThemeIcon.File;
-		item.tooltip = node.entry.isSymbolicLink ? `${node.entry.path} (symbolic link)` : node.entry.path;
+		item.tooltip =
+			(node.entry.isSymbolicLink ? `${node.entry.path} (symbolic link)` : node.entry.path) +
+			(node.entry.permissions !== undefined
+				? `\nPermissions: ${formatPermissions(node.entry.permissions)} (${formatOctal(node.entry.permissions)})`
+				: '');
 		if (node.entry.isSymbolicLink) {
 			item.description = 'link';
 		}
@@ -242,7 +256,7 @@ export class RemoteTreeProvider implements vscode.TreeDataProvider<TreeNode>, vs
 				return [];
 			}
 			const entries = await client.list(remotePath);
-			entries.sort((a, b) => (a.isDirectory === b.isDirectory ? a.name.localeCompare(b.name) : a.isDirectory ? -1 : 1));
+			entries.sort(compareEntries);
 			return entries.map(entry => this.fileNode(server, entry));
 		} catch (err) {
 			vscode.window.showErrorMessage(`Failed to list "${remotePath}": ${(err as Error).message}`);
@@ -308,6 +322,12 @@ export class RemoteTreeProvider implements vscode.TreeDataProvider<TreeNode>, vs
 			vscode.window.showWarningMessage('Moving files between different servers is not supported.');
 		}
 
+		if (
+			sameServer.length > 0 &&
+			!(await confirmProductionChange(targetServer, `Move ${sameServer.length} item(s) into ${targetDir}.`))
+		) {
+			return;
+		}
 		try {
 			const targetClient = await this.connections.getSessionClient(targetServer);
 			if (!targetClient) {
@@ -349,10 +369,16 @@ export class RemoteTreeProvider implements vscode.TreeDataProvider<TreeNode>, vs
 
 		const server = target.server;
 		const targetDir = dropDirectoryOf(target);
+		if (!(await confirmProductionChange(server, `Upload ${local.length} item(s) to ${targetDir}.`))) {
+			return;
+		}
 		try {
 			// Dropping is an explicit request, so it may open a connection the tree doesn't have yet.
 			const client = await this.connections.getClient(server);
 			const summary = await withTransferProgress(`Uploading ${local.length} item(s) to ${server.name}`, async run => {
+				// Every existing item below is confirmed with Replace or Skip, so a second question about
+				// server changes would only repeat it.
+				run.remoteConflicts = 'overwrite';
 				for (const uri of local) {
 					const name = path.basename(uri.fsPath);
 					const remotePath = joinRemote(targetDir, name);
