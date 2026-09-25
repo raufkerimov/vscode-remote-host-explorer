@@ -5,6 +5,8 @@ import type { ConnectionManager } from '../remote/ConnectionManager';
 import type { ServerProfile } from '../config/serverConfig';
 import type { RemoteFileEntry } from '../remote/RemoteClient';
 import { rsyncUpload } from '../remote/rsyncUpload';
+import { remoteLabel } from '../remote/transfer';
+import { transferLog } from '../remote/transferLog';
 import { isSameOrInside, normalizeRemote, toSafeRelativePath } from '../util/remotePath';
 
 const STATE_KEY = 'remoteHostExplorer.trackedRemoteFiles';
@@ -153,15 +155,25 @@ export class RemoteFileCache {
 			}
 		}
 
-		if (server.protocol === 'sftp' && server.useRsyncForUpload) {
-			await rsyncUpload(
-				server,
-				{ localPath: cachePath, remotePath: tracked.remotePath, isDirectory: false },
-				this.outputChannel
-			);
-		} else {
-			await client.put(cachePath, tracked.remotePath);
+		const record = transferLog.start(`Saving ${path.basename(cachePath)} to ${server.name}`);
+		const entry = { from: cachePath, to: remoteLabel(server, tracked.remotePath), localPath: cachePath };
+		try {
+			if (server.protocol === 'sftp' && server.useRsyncForUpload) {
+				await rsyncUpload(
+					server,
+					{ localPath: cachePath, remotePath: tracked.remotePath, isDirectory: false },
+					this.outputChannel
+				);
+			} else {
+				await client.put(cachePath, tracked.remotePath);
+			}
+		} catch (err) {
+			transferLog.add(record, { ...entry, status: 'failed', error: (err as Error).message });
+			transferLog.finish(record, 'failed', (err as Error).message);
+			throw err;
 		}
+		transferLog.add(record, { ...entry, status: 'done' });
+		transferLog.finish(record, 'done');
 
 		const updated = await client.stat(tracked.remotePath);
 		tracked.remoteModifiedAt = updated?.modifiedAt ?? Date.now();

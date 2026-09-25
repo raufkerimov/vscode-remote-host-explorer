@@ -1,6 +1,6 @@
 import * as vscode from 'vscode';
 import type { SecretsManager } from '../config/secrets';
-import { getServerProfiles, whenServerProfilesLoaded, type ServerProfile } from '../config/serverConfig';
+import { getServerProfiles, whenServerProfilesLoaded, type LocalPathResolution, type ServerProfile } from '../config/serverConfig';
 import type { ConnectionManager } from '../remote/ConnectionManager';
 import type { HostKeyStore } from '../remote/hostKeys';
 import type { RemoteFileCache } from '../editing/RemoteFileCache';
@@ -73,6 +73,35 @@ export async function pickServer(): Promise<ServerProfile | undefined> {
 	const picked = await vscode.window.showQuickPick(
 		servers.map(server => ({ label: server.name, description: `${server.protocol}://${server.host}`, server })),
 		{ placeHolder: 'Select a server' }
+	);
+	return picked?.server;
+}
+
+/**
+ * Chooses the server for local files that several profiles map (dev and prod on one folder). One
+ * candidate is used directly; with more, the user picks, and nothing is remembered, so an upload to
+ * production is always a deliberate choice. `resolutions` holds every mapping of every file.
+ */
+export async function pickServerForLocalFiles(
+	resolutions: readonly LocalPathResolution[],
+	placeHolder: string
+): Promise<ServerProfile | undefined> {
+	const candidates = new Map<string, LocalPathResolution[]>();
+	for (const resolution of resolutions) {
+		candidates.set(resolution.server.id, [...(candidates.get(resolution.server.id) ?? []), resolution]);
+	}
+	const choices = [...candidates.values()];
+	if (choices.length <= 1) {
+		return choices[0]?.[0].server;
+	}
+	const picked = await vscode.window.showQuickPick(
+		choices.map(([first, ...rest]) => ({
+			label: first.server.name,
+			description: `${first.server.protocol}://${first.server.host}`,
+			detail: `→ ${first.remotePath}${rest.length > 0 ? ` and ${rest.length} more` : ''}`,
+			server: first.server,
+		})),
+		{ placeHolder }
 	);
 	return picked?.server;
 }

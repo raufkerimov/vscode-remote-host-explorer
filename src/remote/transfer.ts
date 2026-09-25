@@ -7,6 +7,7 @@ import { isIgnored, mappingRootForLocalPath, type ServerProfile } from '../confi
 import type { ConnectionManager } from './ConnectionManager';
 import type { RemoteClient } from './RemoteClient';
 import { rsyncUpload } from './rsyncUpload';
+import { transferLog, type TransferEntry, type TransferEntryStatus } from './transferLog';
 import { joinRemote, toSafeRelativePath } from '../util/remotePath';
 
 export interface TransferSummary {
@@ -27,6 +28,21 @@ export interface TransferRun {
 	localConflicts: 'ask' | 'overwrite' | 'skip';
 	/** Asks about one existing local file. Injectable so tests don't need a real dialog. */
 	confirmLocalOverwrite: (label: string) => Promise<LocalOverwriteDecision>;
+	/** Records one file in the Transfers view; absent in tests. */
+	log?: (entry: TransferEntry) => void;
+}
+
+/** How a remote path appears in the Transfers view. */
+export function remoteLabel(server: ServerProfile, remotePath: string): string {
+	return `${server.name}:${remotePath}`;
+}
+
+function logUpload(run: TransferRun, server: ServerProfile, localPath: string, remotePath: string, status: TransferEntryStatus, error?: string): void {
+	run.log?.({ from: localPath, to: remoteLabel(server, remotePath), status, localPath, error });
+}
+
+function logDownload(run: TransferRun, server: ServerProfile, remotePath: string, localPath: string, status: TransferEntryStatus, error?: string): void {
+	run.log?.({ from: remoteLabel(server, remotePath), to: localPath, status, localPath, error });
 }
 
 export async function promptLocalOverwrite(label: string): Promise<LocalOverwriteDecision> {
@@ -153,13 +169,21 @@ interface PlannedFile {
 async function transferPlannedFiles(
 	server: ServerProfile,
 	run: TransferRun,
+	direction: 'upload' | 'download',
 	files: readonly PlannedFile[],
 	transfer: (file: PlannedFile) => Promise<void>
 ): Promise<void> {
+	const log = direction === 'upload' ? logUpload : logDownload;
 	const increment = files.length > 0 ? 100 / files.length : 0;
 	await runWithLimit(files, parallelTransfersFor(server), run.token, async file => {
 		run.progress.report({ message: file.label });
-		await transfer(file);
+		try {
+			await transfer(file);
+		} catch (err) {
+			log(run, server, file.from, file.to, 'failed', (err as Error).message);
+			throw err;
+		}
+		log(run, server, file.from, file.to, 'done');
 		run.summary.transferred += 1;
 		run.progress.report({ increment });
 	});
@@ -174,17 +198,28 @@ export async function withTransferProgress(
 	run: (run: TransferRun) => Promise<void>
 ): Promise<TransferSummary | undefined> {
 	const summary: TransferSummary = { transferred: 0, skipped: 0, keptLocal: 0 };
+	const record = transferLog.start(title);
 	try {
 		await vscode.window.withProgress(
 			{ location: vscode.ProgressLocation.Notification, title, cancellable: true },
 			async (progress, token) =>
-				run({ progress, token, summary, localConflicts: 'ask', confirmLocalOverwrite: promptLocalOverwrite })
+				run({
+					progress,
+					token,
+					summary,
+					localConflicts: 'ask',
+					confirmLocalOverwrite: promptLocalOverwrite,
+					log: entry => transferLog.add(record, entry),
+				})
 		);
+		transferLog.finish(record, 'done');
 		return summary;
 	} catch (err) {
 		if (err instanceof CancelledError) {
+			transferLog.finish(record, 'cancelled');
 			return undefined;
 		}
+		transferLog.finish(record, 'failed', (err as Error).message);
 		throw err;
 	}
 }
@@ -218,6 +253,7 @@ export async function uploadPath(
 		run.progress.report({ message: `rsync ${path.basename(localPath)}` });
 		if (!stats.isDirectory()) {
 			await rsyncUpload(server, { localPath, remotePath, isDirectory: false }, outputChannel, run.token);
+			logUpload(run, server, localPath, remotePath, 'done');
 			run.summary.transferred += 1;
 			return;
 		}
@@ -240,6 +276,9 @@ export async function uploadPath(
 		} finally {
 			await fs.promises.rm(listFile, { force: true });
 		}
+		for (const file of files) {
+			logUpload(run, server, path.join(localPath, ...file.split('/')), joinRemote(remotePath, file), 'done');
+		}
 		run.summary.transferred += files.length;
 		return;
 	}
@@ -248,10 +287,16 @@ export async function uploadPath(
 	if (stats.isDirectory()) {
 		const files: PlannedFile[] = [];
 		await planUploadDirectory(server, client, localPath, localPath, remotePath, run, files);
-		await transferPlannedFiles(server, run, files, file => client.put(file.from, file.to));
+		await transferPlannedFiles(server, run, 'upload', files, file => client.put(file.from, file.to));
 	} else {
 		run.progress.report({ message: path.basename(localPath) });
-		await client.put(localPath, remotePath);
+		try {
+			await client.put(localPath, remotePath);
+		} catch (err) {
+			logUpload(run, server, localPath, remotePath, 'failed', (err as Error).message);
+			throw err;
+		}
+		logUpload(run, server, localPath, remotePath, 'done');
 		run.summary.transferred += 1;
 	}
 }
@@ -307,6 +352,7 @@ async function planUploadDirectory(
 		const childRemotePath = joinRemote(remoteDirPath, item.name);
 
 		if (isIgnored(server, ignorePathFor(server, rootLocalPath, childLocalPath))) {
+			logUpload(run, server, childLocalPath, childRemotePath, 'ignored');
 			run.summary.skipped += 1;
 			continue;
 		}
@@ -330,16 +376,23 @@ export async function downloadPath(
 	if (isDirectory) {
 		const files: PlannedFile[] = [];
 		await planDownloadDirectory(server, client, localPath, remotePath, localPath, run, files);
-		await transferPlannedFiles(server, run, files, file => client.get(file.from, file.to));
+		await transferPlannedFiles(server, run, 'download', files, file => client.get(file.from, file.to));
 		return;
 	}
 	if (!(await mayWriteLocalFile(run, localPath, path.basename(localPath)))) {
+		logDownload(run, server, remotePath, localPath, 'kept');
 		run.summary.keptLocal += 1;
 		return;
 	}
 	run.progress.report({ message: path.basename(localPath) });
 	await fs.promises.mkdir(path.dirname(localPath), { recursive: true });
-	await client.get(remotePath, localPath);
+	try {
+		await client.get(remotePath, localPath);
+	} catch (err) {
+		logDownload(run, server, remotePath, localPath, 'failed', (err as Error).message);
+		throw err;
+	}
+	logDownload(run, server, remotePath, localPath, 'done');
 	run.summary.transferred += 1;
 }
 
@@ -373,6 +426,7 @@ async function planDownloadDirectory(
 		const childLocalPath = path.join(localDirPath, safeName);
 
 		if (isIgnored(server, ignorePathFor(server, rootLocalPath, childLocalPath))) {
+			logDownload(run, server, entry.path, childLocalPath, 'ignored');
 			run.summary.skipped += 1;
 			continue;
 		}
@@ -382,6 +436,7 @@ async function planDownloadDirectory(
 		} else {
 			const label = progressLabel(rootLocalPath, childLocalPath);
 			if (!(await mayWriteLocalFile(run, childLocalPath, label))) {
+				logDownload(run, server, entry.path, childLocalPath, 'kept');
 				run.summary.keptLocal += 1;
 				continue;
 			}
@@ -392,6 +447,7 @@ async function planDownloadDirectory(
 
 /** Recursively copies a remote file or directory to another remote path on the same server. */
 export async function copyRemoteTree(
+	server: ServerProfile,
 	client: RemoteClient,
 	fromPath: string,
 	toPath: string,
@@ -402,7 +458,13 @@ export async function copyRemoteTree(
 
 	if (!isDirectory) {
 		run.progress.report({ message: fromPath });
-		await client.copy(fromPath, toPath);
+		try {
+			await client.copy(fromPath, toPath);
+		} catch (err) {
+			run.log?.({ from: remoteLabel(server, fromPath), to: remoteLabel(server, toPath), status: 'failed', error: (err as Error).message });
+			throw err;
+		}
+		run.log?.({ from: remoteLabel(server, fromPath), to: remoteLabel(server, toPath), status: 'done' });
 		run.summary.transferred += 1;
 		return;
 	}
@@ -411,6 +473,6 @@ export async function copyRemoteTree(
 	const entries = await client.list(fromPath);
 	for (const entry of entries) {
 		throwIfCancelled(run.token);
-		await copyRemoteTree(client, entry.path, joinRemote(toPath, entry.name), entry.isDirectory, run);
+		await copyRemoteTree(server, client, entry.path, joinRemote(toPath, entry.name), entry.isDirectory, run);
 	}
 }

@@ -95,7 +95,11 @@ on save use only the mapped folders. If mapped folders are nested, the innermost
 
 - **Upload**: right-click files or folders in the Explorer and choose **Upload to Remote Host**. It is
   greyed out for items outside every mapped local folder.
-- **Upload on save**: turn on **Auto-upload on save** for the server.
+- **Several servers for one folder** (for example dev and prod): uploading asks which server to use,
+  every time, so production is never picked by accident. With one server, it uploads right away.
+  **Compare with Remote** asks the same way.
+- **Upload on save**: turn on **Auto-upload on save** for the server. If several servers map the file,
+  each one with auto-upload turned on receives it.
 - **Download**: right-click items in the Remote Hosts view and choose **Download to Local** to download
   them into their mapped local folder. It is greyed out for items outside every mapped server folder.
 - **Download anywhere**: choose **Download to Folder...** instead and pick a folder. This works for any
@@ -107,6 +111,10 @@ on save use only the mapped folders. If mapped folders are nested, the innermost
   Remote Hosts view and choose **Compare with Local**. The server's copy opens read-only on the left.
 - **Large transfers** show progress and can be cancelled. Over SFTP, up to four files in a folder are
   transferred at the same time; FTP sends one file at a time.
+- **Transfers panel**: every upload, download, and copy in this window is listed in the **Transfers**
+  tab of the bottom panel. Expand one to see each file as `from → to`, including files that were
+  ignored, kept, or failed. Click a file to open your local copy. The **Show Transfers** button on a
+  finished transfer's notification opens the panel.
 
 ### Ignore patterns
 
@@ -221,7 +229,8 @@ Passwords and passphrases are not settings; enter them in the form.
 
 ## Troubleshooting
 
-Details of every upload and error are written to **View → Output → Remote Host Explorer**.
+The **Transfers** panel shows where each file went. Details of errors are written to **View → Output →
+Remote Host Explorer**.
 
 **The Remote Hosts view is empty or does nothing.**
 Make sure the folder is trusted: run **Workspaces: Manage Workspace Trust** from the Command Palette.

@@ -1,10 +1,10 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import * as vscode from 'vscode';
-import { getServerProfile, localPathForRemote, resolveServerForLocalPath, type ServerProfile } from '../config/serverConfig';
+import { getServerProfile, localPathForRemote, resolveServersForLocalPath, type ServerProfile } from '../config/serverConfig';
 import type { TreeNode } from '../tree/RemoteTreeProvider';
 import { basenameRemote } from '../util/remotePath';
-import { guarded, type CommandServices } from './shared';
+import { guarded, pickServerForLocalFiles, type CommandServices } from './shared';
 
 /** Scheme of the read-only documents that show a server's copy of a file in a diff. */
 export const REMOTE_DOCUMENT_SCHEME = 'remotehostexplorer-remote';
@@ -64,8 +64,8 @@ export function registerCompareCommands(services: CommandServices): vscode.Dispo
 				if (!localUri) {
 					return;
 				}
-				const resolution = resolveServerForLocalPath(localUri.fsPath);
-				if (!resolution) {
+				const resolutions = resolveServersForLocalPath(localUri.fsPath);
+				if (resolutions.length === 0) {
 					vscode.window.showWarningMessage(
 						'No server mapping found for this file. Add a folder mapping to a server profile first.'
 					);
@@ -73,6 +73,11 @@ export function registerCompareCommands(services: CommandServices): vscode.Dispo
 				}
 				if (!(await localFileExists(localUri.fsPath))) {
 					vscode.window.showWarningMessage('Compare works on files, not folders.');
+					return;
+				}
+				const server = await pickServerForLocalFiles(resolutions, 'Compare with which server?');
+				const resolution = resolutions.find(candidate => candidate.server === server);
+				if (!resolution) {
 					return;
 				}
 				const client = await connections.getClient(resolution.server);

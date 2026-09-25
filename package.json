@@ -3,7 +3,7 @@
   "displayName": "Remote Host Explorer",
   "description": "A fast and lightweight PhpStorm-style Remote Host manager for VS Code. Features a friendly GUI for server configuration, background upload-on-save, and direct remote file management over SFTP, FTPS, and FTP.",
   "icon": "media/icon.png",
-  "version": "0.1.6",
+  "version": "0.1.7",
   "license": "MIT",
   "publisher": "raufkerimov",
   "author": {
@@ -51,6 +51,13 @@
           "title": "Remote Host Explorer",
           "icon": "media/remote-host-explorer.svg"
         }
+      ],
+      "panel": [
+        {
+          "id": "remoteHostExplorerTransfers",
+          "title": "Transfers",
+          "icon": "media/remote-host-explorer.svg"
+        }
       ]
     },
     "views": {
@@ -60,12 +67,23 @@
           "name": "Remote Hosts",
           "icon": "media/remote-host-explorer.svg"
         }
+      ],
+      "remoteHostExplorerTransfers": [
+        {
+          "id": "remoteHostExplorer.transfers",
+          "name": "Transfers",
+          "icon": "media/remote-host-explorer.svg"
+        }
       ]
     },
     "viewsWelcome": [
       {
         "view": "remoteHostExplorer.servers",
         "contents": "No remote hosts configured yet.\n[Add Server...](command:remoteHostExplorer.addServer)"
+      },
+      {
+        "view": "remoteHostExplorer.transfers",
+        "contents": "Uploads, downloads, and copies made in this window are listed here, file by file."
       }
     ],
     "commands": [
@@ -114,6 +132,12 @@
         "title": "Open SSH Terminal",
         "category": "Remote Host Explorer",
         "icon": "$(terminal)"
+      },
+      {
+        "command": "remoteHostExplorer.clearTransfers",
+        "title": "Clear Transfers",
+        "category": "Remote Host Explorer",
+        "icon": "$(clear-all)"
       },
       {
         "command": "remoteHostExplorer.refresh",
@@ -301,6 +325,11 @@
         {
           "command": "remoteHostExplorer.refresh",
           "when": "view == remoteHostExplorer.servers",
+          "group": "navigation"
+        },
+        {
+          "command": "remoteHostExplorer.clearTransfers",
+          "when": "view == remoteHostExplorer.transfers",
           "group": "navigation"
         }
       ],

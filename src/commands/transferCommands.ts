@@ -1,10 +1,17 @@
 import * as path from 'path';
 import * as vscode from 'vscode';
-import { isIgnored, localPathForRemote, resolveServerForLocalPath } from '../config/serverConfig';
+import {
+	isIgnored,
+	localPathForRemote,
+	resolveServerForLocalPathIn,
+	resolveServersForLocalPath,
+	type ServerProfile,
+} from '../config/serverConfig';
 import { downloadPath, uploadPath, withTransferProgress, type TransferSummary } from '../remote/transfer';
 import { withoutNestedSelections, type FileNode, type TreeNode } from '../tree/RemoteTreeProvider';
 import { dirnameRemote, toSafeRelativePath } from '../util/remotePath';
-import { guarded, resolveSelection, type CommandServices } from './shared';
+import { notifyTransfer } from '../remote/transferLog';
+import { guarded, pickServerForLocalFiles, resolveSelection, type CommandServices } from './shared';
 
 const NO_MAPPING_MESSAGE =
 	'No server mapping found for this file. Add a folder mapping to a server profile first.';
@@ -20,10 +27,10 @@ function localTargets(clicked?: vscode.Uri, selected?: vscode.Uri[]): vscode.Uri
 	return active ? [active] : [];
 }
 
-/** Pairs each local target with its server mapping, dropping targets that no profile maps. */
-function withMappings(targets: readonly vscode.Uri[]) {
+/** Pairs each local target with its mapping on `server`, dropping targets that server doesn't map. */
+function mappedOn(server: ServerProfile, targets: readonly vscode.Uri[]) {
 	return targets.flatMap(uri => {
-		const resolution = resolveServerForLocalPath(uri.fsPath);
+		const resolution = resolveServerForLocalPathIn([server], uri.fsPath);
 		return resolution ? [{ uri, resolution }] : [];
 	});
 }
@@ -45,19 +52,24 @@ export function registerTransferCommands(services: CommandServices): vscode.Disp
 			'remoteHostExplorer.uploadFile',
 			guarded('Upload failed', async (clicked?: vscode.Uri, selected?: vscode.Uri[]) => {
 				const targets = localTargets(clicked, selected);
-				const mapped = withMappings(targets);
-				const unmapped = targets.length - mapped.length;
-
-				if (mapped.length === 0) {
-					if (targets.length > 0) {
-						vscode.window.showWarningMessage(NO_MAPPING_MESSAGE);
-					}
+				if (targets.length === 0) {
 					return;
 				}
+				const resolutions = targets.flatMap(uri => resolveServersForLocalPath(uri.fsPath));
+				if (resolutions.length === 0) {
+					vscode.window.showWarningMessage(NO_MAPPING_MESSAGE);
+					return;
+				}
+				const server = await pickServerForLocalFiles(resolutions, 'Upload to which server?');
+				if (!server) {
+					return;
+				}
+				const mapped = mappedOn(server, targets);
+				const unmapped = targets.length - mapped.length;
 
-				const summary = await withTransferProgress(`Uploading ${mapped.length} item(s)`, async run => {
+				const summary = await withTransferProgress(`Uploading ${mapped.length} item(s) to ${server.name}`, async run => {
 					for (const { uri, resolution } of mapped) {
-						await uploadPath(resolution.server, connections, outputChannel, uri.fsPath, resolution.remotePath, run);
+						await uploadPath(server, connections, outputChannel, uri.fsPath, resolution.remotePath, run);
 					}
 				});
 				if (!summary) {
@@ -65,9 +77,9 @@ export function registerTransferCommands(services: CommandServices): vscode.Disp
 					return;
 				}
 
-				vscode.window.showInformationMessage(summarize('Uploaded', summary, unmapped));
+				void notifyTransfer(summarize('Uploaded', summary, unmapped, ` to ${server.name}`));
 				for (const { resolution } of mapped) {
-					treeProvider.refreshDirectory(resolution.server, dirnameRemote(resolution.remotePath));
+					treeProvider.refreshDirectory(server, dirnameRemote(resolution.remotePath));
 				}
 			})
 		),
@@ -102,7 +114,7 @@ export function registerTransferCommands(services: CommandServices): vscode.Disp
 					vscode.window.showInformationMessage('Download cancelled.');
 					return;
 				}
-				vscode.window.showInformationMessage(summarize('Downloaded', summary, unmapped));
+				void notifyTransfer(summarize('Downloaded', summary, unmapped));
 			})
 		),
 
@@ -135,7 +147,7 @@ export function registerTransferCommands(services: CommandServices): vscode.Disp
 					vscode.window.showInformationMessage('Download cancelled.');
 					return;
 				}
-				vscode.window.showInformationMessage(summarize('Downloaded', summary, 0, ` to ${folder}`));
+				void notifyTransfer(summarize('Downloaded', summary, 0, ` to ${folder}`));
 			})
 		),
 	];
@@ -173,45 +185,38 @@ async function pickDownloadFolder(context: vscode.ExtensionContext, count: numbe
 	return folder.fsPath;
 }
 
-/** Uploads a saved document when its server profile has `autoUpload` enabled. */
+/**
+ * Uploads a saved document to every server that maps it and has `autoUpload` enabled — dev and prod may
+ * both map the folder, with only one of them uploading on save.
+ */
 export async function autoUploadOnSave(
 	document: vscode.TextDocument,
 	services: CommandServices
 ): Promise<void> {
 	const { connections, outputChannel, treeProvider } = services;
-	const resolution = resolveServerForLocalPath(document.uri.fsPath);
-	if (!resolution || !resolution.server.autoUpload) {
-		return;
-	}
+	const resolutions = resolveServersForLocalPath(document.uri.fsPath).filter(resolution => resolution.server.autoUpload);
 
-	// Unlike an explicit upload, auto-upload is implicit, so ignore patterns apply.
-	if (isIgnored(resolution.server, resolution.relativePath)) {
-		outputChannel.appendLine(
-			`Skipped auto-upload of ${document.uri.fsPath} (matches an ignore pattern).`
-		);
-		return;
-	}
-
-	try {
-		const summary = await withTransferProgress(`Auto-uploading to ${resolution.server.name}`, run =>
-			uploadPath(
-				resolution.server,
-				connections,
-				outputChannel,
-				document.uri.fsPath,
-				resolution.remotePath,
-				run
-			)
-		);
-		if (!summary) {
-			return;
+	for (const { server, remotePath, relativePath } of resolutions) {
+		// Unlike an explicit upload, auto-upload is implicit, so ignore patterns apply.
+		if (isIgnored(server, relativePath)) {
+			outputChannel.appendLine(
+				`Skipped auto-upload of ${document.uri.fsPath} to ${server.name} (matches an ignore pattern).`
+			);
+			continue;
 		}
-		outputChannel.appendLine(
-			`Auto-uploaded ${document.uri.fsPath} -> ${resolution.server.name}:${resolution.remotePath}`
-		);
-		treeProvider.refreshDirectory(resolution.server, dirnameRemote(resolution.remotePath));
-	} catch (err) {
-		outputChannel.appendLine(`Auto-upload failed for ${document.uri.fsPath}: ${(err as Error).message}`);
-		vscode.window.showErrorMessage(`Auto-upload failed: ${(err as Error).message}`);
+
+		try {
+			const summary = await withTransferProgress(`Auto-uploading to ${server.name}`, run =>
+				uploadPath(server, connections, outputChannel, document.uri.fsPath, remotePath, run)
+			);
+			if (!summary) {
+				continue;
+			}
+			outputChannel.appendLine(`Auto-uploaded ${document.uri.fsPath} -> ${server.name}:${remotePath}`);
+			treeProvider.refreshDirectory(server, dirnameRemote(remotePath));
+		} catch (err) {
+			outputChannel.appendLine(`Auto-upload to ${server.name} failed for ${document.uri.fsPath}: ${(err as Error).message}`);
+			void notifyTransfer(`Auto-upload to ${server.name} failed: ${(err as Error).message}`, 'error');
+		}
 	}
 }

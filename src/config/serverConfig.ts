@@ -346,9 +346,44 @@ export async function removeServerProfile(id: string): Promise<void> {
 	}
 }
 
+/** The server path a local file maps to through one mapping. */
+function resolveThrough(server: ServerProfile, mapping: ResolvedMapping, target: string): LocalPathResolution {
+	const relativePath = target.slice(mapping.localPath.length).replace(/\\/g, '/').replace(/^\/+/, '');
+	const remotePath = relativePath ? joinRemote(mapping.remotePath, relativePath) : mapping.remotePath;
+	return { server, remotePath, relativePath };
+}
+
+/** The deepest of one profile's mappings whose local folder contains `target` (already normalized). */
+function deepestMapping(server: ServerProfile, target: string): ResolvedMapping | undefined {
+	let best: ResolvedMapping | undefined;
+	for (const mapping of folderMappings(server)) {
+		// Mapping roots are normalized, so a trailing separator cannot make one look longer (and
+		// therefore more specific) than it really is.
+		if (isSameOrInside(mapping.localPath, target) && (!best || mapping.localPath.length > best.localPath.length)) {
+			best = mapping;
+		}
+	}
+	return best;
+}
+
+/**
+ * Every profile that maps the given file, in profile order, each through its own deepest mapping. Several
+ * servers (dev and prod) can map the same folder; uploads ask which one to use. Pure so it can be unit tested.
+ */
+export function resolveServersForLocalPathIn(
+	servers: readonly ServerProfile[],
+	fsPath: string
+): LocalPathResolution[] {
+	const target = normalizeLocal(fsPath);
+	return servers.flatMap(server => {
+		const mapping = deepestMapping(server, target);
+		return mapping ? [resolveThrough(server, mapping, target)] : [];
+	});
+}
+
 /**
  * Resolves the mapping whose local folder is the deepest one containing the given file, across every
- * profile. Pure so it can be unit tested without a configuration host.
+ * profile; on a tie the first profile wins. Pure so it can be unit tested without a configuration host.
  */
 export function resolveServerForLocalPathIn(
 	servers: readonly ServerProfile[],
@@ -357,28 +392,21 @@ export function resolveServerForLocalPathIn(
 	const target = normalizeLocal(fsPath);
 
 	let best: { server: ServerProfile; mapping: ResolvedMapping } | undefined;
-
 	for (const server of servers) {
-		for (const mapping of folderMappings(server)) {
-			// Mapping roots are normalized, so a trailing separator cannot make one look longer (and
-			// therefore more specific) than it really is.
-			if (isSameOrInside(mapping.localPath, target) && (!best || mapping.localPath.length > best.mapping.localPath.length)) {
-				best = { server, mapping };
-			}
+		const mapping = deepestMapping(server, target);
+		if (mapping && (!best || mapping.localPath.length > best.mapping.localPath.length)) {
+			best = { server, mapping };
 		}
 	}
-
-	if (!best) {
-		return undefined;
-	}
-
-	const relativePath = target.slice(best.mapping.localPath.length).replace(/\\/g, '/').replace(/^\/+/, '');
-	const remotePath = relativePath ? joinRemote(best.mapping.remotePath, relativePath) : best.mapping.remotePath;
-	return { server: best.server, remotePath, relativePath };
+	return best ? resolveThrough(best.server, best.mapping, target) : undefined;
 }
 
 export function resolveServerForLocalPath(fsPath: string): LocalPathResolution | undefined {
 	return resolveServerForLocalPathIn(getServerProfiles(), fsPath);
+}
+
+export function resolveServersForLocalPath(fsPath: string): LocalPathResolution[] {
+	return resolveServersForLocalPathIn(getServerProfiles(), fsPath);
 }
 
 /**

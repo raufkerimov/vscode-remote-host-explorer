@@ -13,6 +13,8 @@ import { SecretsManager } from './config/secrets';
 import { ConnectionManager } from './remote/ConnectionManager';
 import { HostKeyStore } from './remote/hostKeys';
 import { RemoteTreeProvider, type TreeNode } from './tree/RemoteTreeProvider';
+import { TransferLogProvider } from './tree/TransferLogProvider';
+import { transferLog } from './remote/transferLog';
 import { RemoteFileCache } from './editing/RemoteFileCache';
 import { registerServerCommands } from './commands/serverCommands';
 import { registerFileCommands } from './commands/fileCommands';
@@ -41,6 +43,8 @@ export async function activate(context: vscode.ExtensionContext) {
 		canSelectMany: true,
 	});
 
+	const transferLogProvider = new TransferLogProvider(transferLog);
+
 	const services: CommandServices = {
 		context,
 		outputChannel,
@@ -63,13 +67,16 @@ export async function activate(context: vscode.ExtensionContext) {
 		// Greys out the Explorer's upload action for items outside every mapping.
 		new MappedFolderIndex(outputChannel),
 		treeView,
+		transferLogProvider,
+		vscode.window.createTreeView('remoteHostExplorer.transfers', { treeDataProvider: transferLogProvider }),
+		vscode.commands.registerCommand('remoteHostExplorer.clearTransfers', () => transferLog.clear()),
 		new vscode.Disposable(() => {
 			void connections.disposeAll();
 		}),
 
 		// Keeps the connected/disconnected indicator accurate even when a connection is made implicitly
 		// (e.g. Test Connection, upload/download, auto-upload) rather than via the explicit Connect action.
-		connections.onDidChangeConnection(serverId => treeProvider.refreshServer(serverId)),
+		connections.onDidChangeConnection(serverId => treeProvider.refreshConnectionState(serverId)),
 
 		vscode.window.onDidChangeActiveTextEditor(() => updateContextKeys()),
 		onDidChangeServerProfiles(() => {

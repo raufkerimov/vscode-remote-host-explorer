@@ -95,10 +95,12 @@ remote-host-explorer/
 │   │   ├── ConnectionManager.ts # Connection pool, in-flight dedupe, state change events
 │   │   ├── hostKeys.ts       # Trust-on-first-use SSH host key store
 │   │   ├── transfer.ts       # Recursive upload/download/copy: plan, then parallel transfer
+│   │   ├── transferLog.ts    # In-memory per-file transfer history + `notifyTransfer` (Show Transfers)
 │   │   ├── sshTerminal.ts    # Pseudoterminal over an ssh2 exec channel on the pooled connection
 │   │   └── rsyncUpload.ts    # rsync-over-ssh uploads (argument construction is unit tested)
 │   ├── tree/
-│   │   └── RemoteTreeProvider.ts # TreeDataProvider + drag/drop; caches node identity
+│   │   ├── RemoteTreeProvider.ts # TreeDataProvider + drag/drop; caches node identity
+│   │   └── TransferLogProvider.ts # The Transfers panel view (bottom panel)
 │   ├── editing/
 │   │   └── RemoteFileCache.ts # Local cache, persisted tracking, save-listener re-uploader
 │   ├── util/
@@ -239,6 +241,14 @@ remote-host-explorer/
 ### 8. Transfers
 - All recursive work lives in `remote/transfer.ts` and runs inside `withTransferProgress`, which
   provides the progress notification and cancellation token. Honour `run.token`.
+- `withTransferProgress` also opens a record in `transferLog` (the Transfers panel). Every file a
+  transfer sends, skips, keeps, or fails on must be reported through `run.log` (`logUpload` /
+  `logDownload` in `transfer.ts`); transfers outside it (saving an opened remote file) write to
+  `transferLog` directly. Show completion messages with `notifyTransfer` so they offer Show Transfers.
+- Several profiles may map the same local folder (dev/prod). Explicit actions resolve every candidate
+  with `resolveServersForLocalPath` and ask via `pickServerForLocalFiles` (never remembered, so prod is
+  always a deliberate choice); auto-upload goes to every candidate with `autoUpload`.
+  `resolveServerForLocalPath` (deepest mapping, first profile on a tie) is only for yes/no checks.
 - Folder transfers are two-phase: a sequential **plan** (create directories, apply ignore patterns, ask
   every overwrite question) and then `runWithLimit` over the planned files — `SFTP_PARALLEL_TRANSFERS`
   for SFTP, 1 for FTP. Never prompt from inside the parallel phase; concurrent modals would interleave.
@@ -268,6 +278,9 @@ remote-host-explorer/
   freshly constructed equivalent node.
 - Prefer `refreshDirectory(server, dir)` over `refresh()` so unrelated expanded folders are not
   re-listed.
+- Connection changes go through `refreshConnectionState`, which also redraws the idle server rows in
+  the same update: VS Code only pulls a non-expandable row's icon into the arrow column while no
+  sibling can expand, and computes it when the row is drawn, so otherwise rows shift sideways.
 - Drag-and-drop and cut/paste both move through `moveRemoteItems` (`remote/moveItems.ts`), which owns
   the no-op, move-into-itself, and replace/skip/cancel conflict rules. Don't reimplement a move loop.
 

@@ -13,6 +13,7 @@ import type { ConnectionManager } from '../remote/ConnectionManager';
 import { moveRemoteItems, promptForConflict } from '../remote/moveItems';
 import type { RemoteFileEntry } from '../remote/RemoteClient';
 import { CancelledError, uploadPath, withTransferProgress } from '../remote/transfer';
+import { notifyTransfer } from '../remote/transferLog';
 import { basenameRemote, dirnameRemote, isSameOrInside, joinRemote, normalizeRemote } from '../util/remotePath';
 
 export const REMOTE_TREE_MIME = 'application/vnd.code.tree.remotehostexplorer';
@@ -72,7 +73,7 @@ export class RemoteTreeProvider implements vscode.TreeDataProvider<TreeNode>, vs
 	readonly dragMimeTypes = [REMOTE_TREE_MIME];
 	readonly dropMimeTypes = [REMOTE_TREE_MIME, URI_LIST_MIME];
 
-	private readonly onDidChangeTreeDataEmitter = new vscode.EventEmitter<TreeNode | undefined>();
+	private readonly onDidChangeTreeDataEmitter = new vscode.EventEmitter<TreeNode | TreeNode[] | undefined>();
 	readonly onDidChangeTreeData = this.onDidChangeTreeDataEmitter.event;
 
 	private readonly serverNodes = new Map<string, ServerNode>();
@@ -119,6 +120,11 @@ export class RemoteTreeProvider implements vscode.TreeDataProvider<TreeNode>, vs
 	}
 
 	refreshServer(serverId: string): void {
+		this.refreshServerWith(serverId, []);
+	}
+
+	/** Refreshes a server (dropping its cached rows) together with `others`, in one update. */
+	private refreshServerWith(serverId: string, others: TreeNode[]): void {
 		const node = this.serverNodes.get(serverId);
 		if (!node) {
 			this.refresh();
@@ -129,7 +135,24 @@ export class RemoteTreeProvider implements vscode.TreeDataProvider<TreeNode>, vs
 				this.fileNodes.delete(key);
 			}
 		}
-		this.onDidChangeTreeDataEmitter.fire(node);
+		this.onDidChangeTreeDataEmitter.fire(others.length > 0 ? [node, ...others] : node);
+	}
+
+	/**
+	 * Redraws a server whose connection changed, plus every server row without a session. VS Code pulls a
+	 * row that can't expand into the arrow column only while no sibling can expand, and decides that when
+	 * the row is drawn — so one server connecting or disconnecting shifts the others. Rows without a
+	 * session have no children, so redrawing them lists nothing on the server.
+	 */
+	refreshConnectionState(serverId: string): void {
+		const idle = [...this.serverNodes.values()].filter(
+			node =>
+				node.server.id !== serverId &&
+				!this.connections.isConnected(node.server.id) &&
+				!this.connections.hasSession(node.server.id)
+		);
+		// One update, so the idle rows are measured against the changed server's new state.
+		this.refreshServerWith(serverId, idle);
 	}
 
 	/** Refreshes just the directory that changed, falling back to the server root when it is not expanded. */
@@ -355,7 +378,7 @@ export class RemoteTreeProvider implements vscode.TreeDataProvider<TreeNode>, vs
 			});
 			if (summary) {
 				const ignored = summary.skipped ? ` (${summary.skipped} skipped)` : '';
-				vscode.window.showInformationMessage(`Uploaded ${summary.transferred} item(s) to ${targetDir}${ignored}.`);
+				void notifyTransfer(`Uploaded ${summary.transferred} item(s) to ${targetDir}${ignored}.`);
 			}
 		} catch (err) {
 			vscode.window.showErrorMessage(`Upload failed: ${(err as Error).message}`);

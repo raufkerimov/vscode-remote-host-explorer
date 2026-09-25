@@ -3,6 +3,17 @@
 All notable changes to Remote Host Explorer are documented here.
 This project follows [Semantic Versioning](https://semver.org/).
 
+## [0.1.7] - 2026-09-25
+
+- **Choose the server** when several servers map the same folder (for example dev and prod): Upload to
+  Remote Host and Compare with Remote ask which one to use. With a single server nothing changes.
+- **Auto-upload on save** now uploads to every server that maps the file and has it turned on. Before,
+  only one of them was used.
+- **Transfers panel** at the bottom lists each upload, download, and copy file by file, with where it
+  came from and where it went. Notifications have a **Show Transfers** button.
+- Server rows in the Remote Hosts view no longer shift sideways when another server connects or
+  disconnects.
+
 ## [0.1.6] - 2026-09-24
 
 - **Several folder mappings per server**: link more than one local folder to server folders, for

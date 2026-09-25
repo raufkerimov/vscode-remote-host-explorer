@@ -4,6 +4,7 @@ import { FileNode, ServerNode, withoutNestedSelections, type TreeNode } from '..
 import { moveRemoteItems, promptForConflict } from '../remote/moveItems';
 import type { RemoteClient } from '../remote/RemoteClient';
 import { CancelledError, copyRemoteTree, withTransferProgress, type TransferRun } from '../remote/transfer';
+import { notifyTransfer } from '../remote/transferLog';
 import { basenameRemote, dirnameRemote, isSameOrInside, joinRemote, normalizeRemote } from '../util/remotePath';
 import { guarded, resolveSelection, type CommandServices } from './shared';
 
@@ -219,7 +220,7 @@ export function registerFileCommands(services: CommandServices): vscode.Disposab
 					vscode.window.showInformationMessage('Copy cancelled.');
 					return;
 				}
-				vscode.window.showInformationMessage(`Pasted ${summary.transferred} file(s) into ${targetDir}.`);
+				void notifyTransfer(`Pasted ${summary.transferred} file(s) into ${targetDir}.`);
 				treeProvider.refreshDirectory(server, targetDir);
 			})
 		),
@@ -381,5 +382,5 @@ async function pasteCopy(
 		await client.delete(destinationPath, source.entry.isDirectory);
 	}
 
-	await copyRemoteTree(client, sourcePath, destinationPath, source.entry.isDirectory, run);
+	await copyRemoteTree(source.server, client, sourcePath, destinationPath, source.entry.isDirectory, run);
 }
