@@ -5,9 +5,9 @@ import * as path from 'path';
 import * as vscode from 'vscode';
 import { isIgnored, mappingRootForLocalPath, type ServerProfile } from '../config/serverConfig';
 import type { ConnectionManager } from './ConnectionManager';
-import type { RemoteClient, RemoteFileEntry } from './RemoteClient';
+import type { RemoteClient, RemoteFileEntry, TransferProgressListener } from './RemoteClient';
 import { rsyncUpload } from './rsyncUpload';
-import { transferLog, type TransferEntry, type TransferEntryStatus } from './transferLog';
+import { describeProgress, transferLog, type TransferEntry, type TransferEntryStatus } from './transferLog';
 import { changedOnServerSince, knownFileStates, type KnownFileStates } from './remoteState';
 import { joinRemote, toSafeRelativePath } from '../util/remotePath';
 
@@ -33,6 +33,12 @@ export interface TransferRun {
 	confirmLocalOverwrite: (label: string) => Promise<LocalOverwriteDecision>;
 	/** Records one file in the Transfers view; absent in tests. */
 	log?: (entry: TransferEntry) => void;
+	/** Shows a file in the Transfers view while it moves; `log` with the same entry then records how it ended. */
+	begin?: (entry: TransferEntry) => void;
+	/** Bytes of a begun file so far, and its size when only the protocol knew it. */
+	advance?: (entry: TransferEntry, transferred: number, total?: number) => void;
+	/** Adds the size of files about to be sent to the run's total, which its percentage is measured against. */
+	expect?: (bytes: number) => void;
 	/**
 	 * States recorded after earlier transfers. With `confirmRemoteOverwrite`, uploads ask before replacing a
 	 * server file that changed since; both are absent in tests that don't exercise that.
@@ -48,12 +54,38 @@ export function remoteLabel(server: ServerProfile, remotePath: string): string {
 	return `${server.name}:${remotePath}`;
 }
 
-function logUpload(run: TransferRun, server: ServerProfile, localPath: string, remotePath: string, status: TransferEntryStatus, error?: string): void {
-	run.log?.({ from: localPath, to: remoteLabel(server, remotePath), status, localPath, error });
+function uploadEntry(server: ServerProfile, localPath: string, remotePath: string, status: TransferEntryStatus, size?: number): TransferEntry {
+	return { from: localPath, to: remoteLabel(server, remotePath), status, localPath, size };
 }
 
-function logDownload(run: TransferRun, server: ServerProfile, remotePath: string, localPath: string, status: TransferEntryStatus, error?: string): void {
-	run.log?.({ from: remoteLabel(server, remotePath), to: localPath, status, localPath, error });
+function downloadEntry(server: ServerProfile, remotePath: string, localPath: string, status: TransferEntryStatus, size?: number): TransferEntry {
+	return { from: remoteLabel(server, remotePath), to: localPath, status, localPath, size };
+}
+
+function logUpload(run: TransferRun, server: ServerProfile, localPath: string, remotePath: string, status: TransferEntryStatus): void {
+	run.log?.(uploadEntry(server, localPath, remotePath, status));
+}
+
+function logDownload(run: TransferRun, server: ServerProfile, remotePath: string, localPath: string, status: TransferEntryStatus): void {
+	run.log?.(downloadEntry(server, remotePath, localPath, status));
+}
+
+/**
+ * Moves one file with `send`, showing it in the Transfers view with its progress while it runs, then logs
+ * how it ended. A failure is logged and rethrown.
+ */
+async function sendFile(run: TransferRun, entry: TransferEntry, send: (onProgress: TransferProgressListener) => Promise<void>): Promise<void> {
+	run.begin?.(entry);
+	try {
+		await send((transferred, total) => run.advance?.(entry, transferred, total));
+	} catch (err) {
+		entry.status = 'failed';
+		entry.error = (err as Error).message;
+		run.log?.(entry);
+		throw err;
+	}
+	entry.status = 'done';
+	run.log?.(entry);
 }
 
 export function promptLocalOverwrite(label: string): Promise<LocalOverwriteDecision> {
@@ -285,6 +317,7 @@ interface PlannedFile {
 	from: string;
 	to: string;
 	label: string;
+	size: number;
 	/** Downloads: the listing entry, recorded as the server's state once the file is fetched. */
 	remote?: RemoteFileEntry;
 }
@@ -294,23 +327,19 @@ async function transferPlannedFiles(
 	run: TransferRun,
 	direction: 'upload' | 'download',
 	files: readonly PlannedFile[],
-	transfer: (file: PlannedFile) => Promise<void>
+	transfer: (file: PlannedFile, onProgress: TransferProgressListener) => Promise<void>
 ): Promise<void> {
-	const log = direction === 'upload' ? logUpload : logDownload;
-	const increment = files.length > 0 ? 100 / files.length : 0;
+	const entryFor = direction === 'upload' ? uploadEntry : downloadEntry;
+	run.expect?.(files.reduce((total, file) => total + file.size, 0));
 	await runWithLimit(files, parallelTransfersFor(server), run.token, async file => {
 		run.progress.report({ message: file.label });
-		try {
-			await transfer(file);
-		} catch (err) {
-			log(run, server, file.from, file.to, 'failed', (err as Error).message);
-			throw err;
-		}
-		log(run, server, file.from, file.to, 'done');
+		await sendFile(run, entryFor(server, file.from, file.to, 'running', file.size), onProgress => transfer(file, onProgress));
 		run.summary.transferred += 1;
-		run.progress.report({ increment });
 	});
 }
+
+/** Progress arrives per chunk; the notification is updated at most this often. */
+const NOTIFICATION_REFRESH_MS = 250;
 
 /**
  * Runs a transfer inside a cancellable progress notification. Without this, a recursive transfer of a
@@ -325,18 +354,46 @@ export async function withTransferProgress(
 	try {
 		await vscode.window.withProgress(
 			{ location: vscode.ProgressLocation.Notification, title, cancellable: true },
-			async (progress, token) =>
-				run({
-					progress,
-					token,
-					summary,
-					localConflicts: 'ask',
-					confirmLocalOverwrite: promptLocalOverwrite,
-					log: entry => transferLog.add(record, entry),
-					knownFiles: knownFileStates,
-					remoteConflicts: 'ask',
-					confirmRemoteOverwrite: promptRemoteOverwrite,
-				})
+			async (progress, token) => {
+				// The notification shows the current file with the transfer's progress, and its bar follows
+				// the bytes moved. The bar can't move back, so it waits while a later item adds to the total.
+				let label = '';
+				let shownPercent = 0;
+				let timer: ReturnType<typeof setTimeout> | undefined;
+				const update = (): void => {
+					timer = undefined;
+					const percent = record.totalBytes > 0 ? Math.min(100, (record.transferredBytes / record.totalBytes) * 100) : 0;
+					const increment = percent > shownPercent ? percent - shownPercent : undefined;
+					shownPercent = Math.max(shownPercent, percent);
+					progress.report({ message: [label, describeProgress(record)].filter(Boolean).join(' · '), increment });
+				};
+				try {
+					await run({
+						progress: {
+							report: value => {
+								label = value.message ?? label;
+								update();
+							},
+						},
+						token,
+						summary,
+						localConflicts: 'ask',
+						confirmLocalOverwrite: promptLocalOverwrite,
+						log: entry => transferLog.add(record, entry),
+						begin: entry => transferLog.begin(record, entry),
+						advance: (entry, transferred, total) => {
+							transferLog.advance(record, entry, transferred, total);
+							timer ??= setTimeout(update, NOTIFICATION_REFRESH_MS);
+						},
+						expect: bytes => transferLog.expect(record, bytes),
+						knownFiles: knownFileStates,
+						remoteConflicts: 'ask',
+						confirmRemoteOverwrite: promptRemoteOverwrite,
+					});
+				} finally {
+					clearTimeout(timer);
+				}
+			}
 		);
 		transferLog.finish(record, 'done');
 		return summary;
@@ -426,8 +483,8 @@ export async function uploadPath(
 		await planUploadDirectory(server, client, localPath, localPath, remotePath, run, files);
 		const sent: PlannedFile[] = [];
 		try {
-			await transferPlannedFiles(server, run, 'upload', files, async file => {
-				await client.put(file.from, file.to);
+			await transferPlannedFiles(server, run, 'upload', files, async (file, onProgress) => {
+				await client.put(file.from, file.to, onProgress);
 				sent.push(file);
 			});
 		} finally {
@@ -441,14 +498,11 @@ export async function uploadPath(
 				return;
 			}
 		}
+		run.expect?.(stats.size);
 		run.progress.report({ message: path.basename(localPath) });
-		try {
-			await client.put(localPath, remotePath);
-		} catch (err) {
-			logUpload(run, server, localPath, remotePath, 'failed', (err as Error).message);
-			throw err;
-		}
-		logUpload(run, server, localPath, remotePath, 'done');
+		await sendFile(run, uploadEntry(server, localPath, remotePath, 'running', stats.size), onProgress =>
+			client.put(localPath, remotePath, onProgress)
+		);
 		run.summary.transferred += 1;
 		await recordTransfer(run, server, client, remotePath, localPath);
 	}
@@ -522,7 +576,8 @@ async function planUploadDirectory(
 				keepRemote(run, server, childLocalPath, childRemotePath);
 				continue;
 			}
-			files.push({ from: childLocalPath, to: childRemotePath, label });
+			const { size } = await fs.promises.stat(childLocalPath);
+			files.push({ from: childLocalPath, to: childRemotePath, label, size });
 		}
 	}
 }
@@ -533,13 +588,15 @@ export async function downloadPath(
 	remotePath: string,
 	localPath: string,
 	isDirectory: boolean,
-	run: TransferRun
+	run: TransferRun,
+	/** A single file's size, when the caller has it from a listing; otherwise the protocol may report it. */
+	size?: number
 ): Promise<void> {
 	if (isDirectory) {
 		const files: PlannedFile[] = [];
 		await planDownloadDirectory(server, client, localPath, remotePath, localPath, run, files);
-		await transferPlannedFiles(server, run, 'download', files, async file => {
-			await client.get(file.from, file.to);
+		await transferPlannedFiles(server, run, 'download', files, async (file, onProgress) => {
+			await client.get(file.from, file.to, onProgress);
 			await recordTransfer(run, server, client, file.from, file.to, file.remote);
 		});
 		return;
@@ -549,15 +606,14 @@ export async function downloadPath(
 		run.summary.keptLocal += 1;
 		return;
 	}
+	if (size !== undefined) {
+		run.expect?.(size);
+	}
 	run.progress.report({ message: path.basename(localPath) });
 	await fs.promises.mkdir(path.dirname(localPath), { recursive: true });
-	try {
-		await client.get(remotePath, localPath);
-	} catch (err) {
-		logDownload(run, server, remotePath, localPath, 'failed', (err as Error).message);
-		throw err;
-	}
-	logDownload(run, server, remotePath, localPath, 'done');
+	await sendFile(run, downloadEntry(server, remotePath, localPath, 'running', size), onProgress =>
+		client.get(remotePath, localPath, onProgress)
+	);
 	run.summary.transferred += 1;
 	await recordTransfer(run, server, client, remotePath, localPath);
 }
@@ -606,7 +662,7 @@ async function planDownloadDirectory(
 				run.summary.keptLocal += 1;
 				continue;
 			}
-			files.push({ from: entry.path, to: childLocalPath, label, remote: entry });
+			files.push({ from: entry.path, to: childLocalPath, label, size: entry.size, remote: entry });
 		}
 	}
 }

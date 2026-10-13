@@ -7,7 +7,8 @@ import { resolveServersForLocalPathIn, type ServerProfile } from '../config/serv
 import type { ConnectionManager } from '../remote/ConnectionManager';
 import type { RemoteClient, RemoteFileEntry } from '../remote/RemoteClient';
 import { downloadPath, type TransferRun } from '../remote/transfer';
-import { MAX_TRANSFER_RECORDS, TransferLog, type TransferEntry } from '../remote/transferLog';
+import { describeProgress, MAX_TRANSFER_RECORDS, TransferLog, type TransferEntry } from '../remote/transferLog';
+import { formatBytes, formatDuration } from '../util/format';
 import type { RemoteFileCache } from '../editing/RemoteFileCache';
 import { RemoteTreeProvider, type TreeNode } from '../tree/RemoteTreeProvider';
 import { describeRecord, TransferLogProvider } from '../tree/TransferLogProvider';
@@ -107,6 +108,68 @@ suite('TransferLog', () => {
 		log.finish(record, 'failed', 'boom');
 		assert.match(describeRecord(record), / · failed · 2 transferred, 1 ignored, 1 failed$/);
 	});
+
+	test('a file shown while it moves is updated in place when it ends', () => {
+		const log = new TransferLog();
+		const record = log.start('Uploading');
+		log.expect(record, 1000);
+		const entry: TransferEntry = { from: 'a', to: 'b', status: 'running', size: 1000 };
+		log.begin(record, entry);
+		log.advance(record, entry, 400);
+		assert.strictEqual(record.transferredBytes, 400);
+		assert.match(describeProgress(record), /^40%/);
+		// Progress reports may stop short of the end; a sent file counts in full.
+		entry.status = 'done';
+		log.add(record, entry);
+		assert.deepStrictEqual(record.entries, [entry]);
+		assert.strictEqual(record.transferredBytes, 1000);
+		assert.strictEqual(entry.transferred, 1000);
+	});
+
+	test('a file the protocol sizes is added to the total', () => {
+		const log = new TransferLog();
+		const record = log.start('Downloading');
+		const entry: TransferEntry = { from: 'a', to: 'b', status: 'running' };
+		log.begin(record, entry);
+		assert.strictEqual(describeProgress(record), '');
+		log.advance(record, entry, 512, 2048);
+		log.advance(record, entry, 512, 2048);
+		assert.strictEqual(record.totalBytes, 2048);
+		assert.strictEqual(record.transferredBytes, 512);
+		assert.match(describeProgress(record), /^25%/);
+	});
+
+	test('progress and speed while running, size once finished', () => {
+		const log = new TransferLog();
+		const record = log.start('Uploading');
+		log.expect(record, 4 * 1024 * 1024);
+		const entry: TransferEntry = { from: 'a', to: 'b', status: 'running', size: 4 * 1024 * 1024 };
+		log.begin(record, entry);
+		log.advance(record, entry, 1024 * 1024);
+		record.speed = 512 * 1024;
+		assert.match(describeRecord(record), / · 25% · 512 KB\/s · 6s left · 0 transferred$/);
+		entry.status = 'done';
+		log.add(record, entry);
+		log.finish(record, 'done');
+		assert.strictEqual(record.speed, undefined);
+		assert.match(describeRecord(record), / · 1 transferred · 4\.0 MB$/);
+	});
+});
+
+suite('formatting sizes and durations', () => {
+	test('bytes', () => {
+		assert.strictEqual(formatBytes(0), '0 B');
+		assert.strictEqual(formatBytes(1023), '1023 B');
+		assert.strictEqual(formatBytes(1536), '1.5 KB');
+		assert.strictEqual(formatBytes(50 * 1024 * 1024), '50 MB');
+		assert.strictEqual(formatBytes(3 * 1024 ** 3), '3.0 GB');
+	});
+
+	test('durations', () => {
+		assert.strictEqual(formatDuration(4.4), '4s');
+		assert.strictEqual(formatDuration(185), '3m 05s');
+		assert.strictEqual(formatDuration(4800), '1h 20m');
+	});
 });
 
 suite('transfers report every file', () => {
@@ -142,9 +205,39 @@ suite('transfers report every file', () => {
 		await downloadPath(server('dev'), client, '/site', dir, true, run);
 
 		const byName = (name: string) => entries.find(entry => entry.to === path.join(dir, name));
-		assert.deepStrictEqual(byName('a.txt'), { from: 'dev:/site/a.txt', to: path.join(dir, 'a.txt'), status: 'done', localPath: path.join(dir, 'a.txt'), error: undefined });
+		assert.deepStrictEqual(byName('a.txt'), { from: 'dev:/site/a.txt', to: path.join(dir, 'a.txt'), status: 'done', localPath: path.join(dir, 'a.txt'), size: 0 });
 		assert.strictEqual(byName('b.txt')?.status, 'kept');
 		assert.strictEqual(byName('.env')?.status, 'ignored');
+	});
+
+	test('a download shows the file while it moves and reports its bytes', async () => {
+		const client = {
+			get: async (_remotePath: string, localPath: string, onProgress?: (transferred: number, total?: number) => void) => {
+				onProgress?.(3, 6);
+				onProgress?.(6, 6);
+				await fs.promises.writeFile(localPath, 'ABCDEF');
+			},
+		} as unknown as RemoteClient;
+		const log = new TransferLog();
+		const record = log.start('Downloading');
+		const run: TransferRun = {
+			progress: { report: () => undefined },
+			token: { isCancellationRequested: false } as vscode.CancellationToken,
+			summary: { transferred: 0, skipped: 0, keptLocal: 0 },
+			localConflicts: 'ask',
+			confirmLocalOverwrite: async () => 'skip',
+			log: entry => log.add(record, entry),
+			begin: entry => log.begin(record, entry),
+			advance: (entry, transferred, total) => log.advance(record, entry, transferred, total),
+			expect: bytes => log.expect(record, bytes),
+		};
+
+		await downloadPath(server('dev'), client, '/site/a.txt', path.join(dir, 'a.txt'), false, run);
+
+		assert.strictEqual(record.entries.length, 1);
+		assert.strictEqual(record.entries[0].status, 'done');
+		assert.strictEqual(record.totalBytes, 6);
+		assert.strictEqual(record.transferredBytes, 6);
 	});
 });
 

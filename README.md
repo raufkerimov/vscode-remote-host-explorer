@@ -127,8 +127,9 @@ on save use only the mapped folders. If mapped folders are nested, the innermost
 - **Large transfers** show progress and can be cancelled. Over SFTP, up to four files in a folder are
   transferred at the same time; FTP sends one file at a time.
 - **Transfers panel**: every upload, download, and copy in this window is listed in the **Transfers**
-  tab of the bottom panel. Expand one to see each file as `from → to`, including files that were
-  ignored, kept, or failed. Click a file to open your local copy. The **Show Transfers** button on a
+  tab of the bottom panel. While a transfer runs, its row shows how far it has got, the speed, and
+  the time left, and each file being sent shows its own percentage. Expand one to see each file as
+  `from → to`, including files that were ignored, kept, or failed. Click a file to open your local copy. The **Show Transfers** button on a
   finished transfer's notification opens the panel.
 
 ### Production servers

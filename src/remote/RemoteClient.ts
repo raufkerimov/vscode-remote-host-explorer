@@ -12,6 +12,9 @@ export interface RemoteFileEntry {
 	permissions?: number;
 }
 
+/** Called while a file's contents move: bytes so far, and the file's size when the protocol reports it. */
+export type TransferProgressListener = (transferred: number, total?: number) => void;
+
 export interface RemoteClient {
 	connect(): Promise<void>;
 	disconnect(): Promise<void>;
@@ -20,10 +23,10 @@ export interface RemoteClient {
 	/** Resolves to `undefined` only when the path does not exist; other failures reject. */
 	stat(remotePath: string): Promise<RemoteFileEntry | undefined>;
 	exists(remotePath: string): Promise<boolean>;
-	get(remotePath: string, localPath: string): Promise<void>;
+	get(remotePath: string, localPath: string, onProgress?: TransferProgressListener): Promise<void>;
 	/** Reads a whole remote file into memory, e.g. for a read-only diff. */
 	readFile(remotePath: string): Promise<Buffer>;
-	put(localPath: string, remotePath: string): Promise<void>;
+	put(localPath: string, remotePath: string, onProgress?: TransferProgressListener): Promise<void>;
 	/** Writes in-memory contents directly, without staging a local temp file. */
 	writeFile(remotePath: string, contents: Buffer): Promise<void>;
 	/** Copies one remote file to another remote path on the same connection. */

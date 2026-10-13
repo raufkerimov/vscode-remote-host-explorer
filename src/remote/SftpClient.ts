@@ -8,6 +8,7 @@ import {
 	type RemoteClient,
 	type RemoteConnectionOptions,
 	type RemoteFileEntry,
+	type TransferProgressListener,
 } from './RemoteClient';
 import { expandHome } from '../util/localPath';
 import { modeFromRights } from '../util/permissions';
@@ -16,6 +17,11 @@ import { joinRemote, normalizeRemote } from '../util/remotePath';
 /** Keeps idle sessions alive through NAT/firewall timeouts instead of failing on the next operation. */
 const KEEPALIVE_INTERVAL_MS = 20_000;
 const READY_TIMEOUT_MS = 15_000;
+
+/** `fastGet`/`fastPut` options that report each chunk; `undefined` keeps the library defaults. */
+function progressOptions(onProgress: TransferProgressListener | undefined): { step: (transferred: number, chunk: number, total: number) => void } | undefined {
+	return onProgress && { step: (transferred, _chunk, total) => onProgress(transferred, total) };
+}
 
 export class SftpRemoteClient implements RemoteClient {
 	private client: SftpClientLib;
@@ -223,16 +229,16 @@ export class SftpRemoteClient implements RemoteClient {
 		return this.wrapOp(async () => Boolean(await this.client.exists(remotePath)));
 	}
 
-	async get(remotePath: string, localPath: string): Promise<void> {
-		await this.wrapOp(() => this.client.fastGet(remotePath, localPath));
+	async get(remotePath: string, localPath: string, onProgress?: TransferProgressListener): Promise<void> {
+		await this.wrapOp(() => this.client.fastGet(remotePath, localPath, progressOptions(onProgress)));
 	}
 
 	async readFile(remotePath: string): Promise<Buffer> {
 		return this.wrapOp(async () => (await this.client.get(remotePath)) as Buffer);
 	}
 
-	async put(localPath: string, remotePath: string): Promise<void> {
-		await this.wrapOp(() => this.client.fastPut(localPath, remotePath));
+	async put(localPath: string, remotePath: string, onProgress?: TransferProgressListener): Promise<void> {
+		await this.wrapOp(() => this.client.fastPut(localPath, remotePath, progressOptions(onProgress)));
 	}
 
 	async writeFile(remotePath: string, contents: Buffer): Promise<void> {

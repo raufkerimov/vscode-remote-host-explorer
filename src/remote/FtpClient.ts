@@ -10,6 +10,7 @@ import {
 	type RemoteClient,
 	type RemoteConnectionOptions,
 	type RemoteFileEntry,
+	type TransferProgressListener,
 } from './RemoteClient';
 import { formatOctal } from '../util/permissions';
 import { basenameRemote, dirnameRemote, joinRemote, normalizeRemote } from '../util/remotePath';
@@ -35,6 +36,26 @@ const FTP_FILE_UNAVAILABLE = 550;
 
 function isFtpFileUnavailable(error: unknown): boolean {
 	return (error as { code?: number } | undefined)?.code === FTP_FILE_UNAVAILABLE;
+}
+
+/**
+ * Reports the bytes of one transfer. `basic-ftp` tracks progress per connection, which is safe because a
+ * connection's queue runs one transfer at a time; the handler is removed before the next one starts.
+ */
+async function trackingProgress<T>(
+	client: BasicFtpClient,
+	onProgress: TransferProgressListener | undefined,
+	operation: () => Promise<T>
+): Promise<T> {
+	if (!onProgress) {
+		return operation();
+	}
+	client.trackProgress(info => onProgress(info.bytes));
+	try {
+		return await operation();
+	} finally {
+		client.trackProgress(undefined);
+	}
 }
 
 /**
@@ -326,8 +347,10 @@ export class FtpRemoteClient implements RemoteClient {
 		return this.run(async client => (await this.statWith(client, remotePath)) !== undefined);
 	}
 
-	async get(remotePath: string, localPath: string): Promise<void> {
-		await this.runTransfer(client => client.downloadTo(localPath, this.resolve(remotePath)));
+	async get(remotePath: string, localPath: string, onProgress?: TransferProgressListener): Promise<void> {
+		await this.runTransfer(client =>
+			trackingProgress(client, onProgress, () => client.downloadTo(localPath, this.resolve(remotePath)))
+		);
 	}
 
 	async readFile(remotePath: string): Promise<Buffer> {
@@ -346,8 +369,10 @@ export class FtpRemoteClient implements RemoteClient {
 		return Buffer.concat(chunks);
 	}
 
-	async put(localPath: string, remotePath: string): Promise<void> {
-		await this.runTransfer(client => client.uploadFrom(localPath, this.resolve(remotePath)));
+	async put(localPath: string, remotePath: string, onProgress?: TransferProgressListener): Promise<void> {
+		await this.runTransfer(client =>
+			trackingProgress(client, onProgress, () => client.uploadFrom(localPath, this.resolve(remotePath)))
+		);
 	}
 
 	async writeFile(remotePath: string, contents: Buffer): Promise<void> {

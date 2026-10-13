@@ -3,6 +3,13 @@
 All notable changes to Remote Host Explorer are documented here.
 This project follows [Semantic Versioning](https://semver.org/).
 
+## [0.2.0] - 2026-10-13
+
+- **Live transfer progress**: the Transfers panel now lists each file as soon as it starts sending,
+  with its percentage and size, and a running transfer shows its overall percentage, speed, and time
+  left. The progress notification's bar follows the bytes sent, so a single large file no longer sits
+  at zero until it finishes. (Uploads through rsync still show no percentage.)
+
 ## [0.1.9] - 2026-10-13
 
 - **FTPS on shared hosting**: a server whose certificate is issued for your provider's host name

@@ -1,6 +1,7 @@
 import * as path from 'path';
 import * as vscode from 'vscode';
-import type { TransferEntry, TransferLog, TransferRecord } from '../remote/transferLog';
+import { describeProgress, type TransferEntry, type TransferLog, type TransferRecord } from '../remote/transferLog';
+import { formatBytes } from '../util/format';
 
 type TransferNode = TransferRecord | TransferEntry;
 
@@ -12,6 +13,7 @@ function isRecord(node: TransferNode): node is TransferRecord {
 const REFRESH_DELAY_MS = 200;
 
 const ENTRY_ICONS: Record<TransferEntry['status'], vscode.ThemeIcon> = {
+	running: new vscode.ThemeIcon('loading~spin'),
 	done: new vscode.ThemeIcon('pass', new vscode.ThemeColor('testing.iconPassed')),
 	ignored: new vscode.ThemeIcon('circle-slash', new vscode.ThemeColor('disabledForeground')),
 	kept: new vscode.ThemeIcon('circle-slash', new vscode.ThemeColor('disabledForeground')),
@@ -20,6 +22,7 @@ const ENTRY_ICONS: Record<TransferEntry['status'], vscode.ThemeIcon> = {
 };
 
 const ENTRY_NOTES: Record<TransferEntry['status'], string> = {
+	running: '',
 	done: '',
 	ignored: 'ignored · ',
 	kept: 'kept local copy · ',
@@ -27,7 +30,10 @@ const ENTRY_NOTES: Record<TransferEntry['status'], string> = {
 	failed: 'failed · ',
 };
 
-/** Summary shown next to a transfer, e.g. "14:25:01 · 3 transferred, 1 ignored". */
+/**
+ * Summary shown next to a transfer: while running, e.g. "14:25:01 · 45% · 1.2 MB/s · 1m 20s left · 3
+ * transferred"; once finished, e.g. "14:25:01 · 3 transferred, 1 ignored · 12 MB".
+ */
 export function describeRecord(record: TransferRecord): string {
 	const counts = new Map<TransferEntry['status'], number>();
 	for (const entry of record.entries) {
@@ -39,8 +45,22 @@ export function describeRecord(record: TransferRecord): string {
 		counts.get('kept') || counts.get('skipped') ? `${(counts.get('kept') ?? 0) + (counts.get('skipped') ?? 0)} kept` : '',
 		counts.get('failed') ? `${counts.get('failed')} failed` : '',
 	].filter(Boolean);
-	const state = record.state === 'running' ? 'running' : record.state === 'done' ? '' : record.state;
-	return [record.startedAt.toLocaleTimeString(), state, parts.join(', ')].filter(Boolean).join(' · ');
+	const running = record.state === 'running';
+	const state = running ? describeProgress(record) || 'running' : record.state === 'done' ? '' : record.state;
+	const moved = !running && record.transferredBytes > 0 ? formatBytes(record.transferredBytes) : '';
+	return [record.startedAt.toLocaleTimeString(), state, parts.join(', '), moved].filter(Boolean).join(' · ');
+}
+
+/** "45% · 1.2 MB of 2.7 MB · " for a file still moving; just the bytes when its size is unknown. */
+function describeEntryProgress(entry: TransferEntry): string {
+	if (entry.status !== 'running' || entry.transferred === undefined) {
+		return '';
+	}
+	if (entry.size === undefined) {
+		return `${formatBytes(entry.transferred)} · `;
+	}
+	const percent = entry.size > 0 ? Math.floor(Math.min(1, entry.transferred / entry.size) * 100) : 0;
+	return `${percent}% · ${formatBytes(entry.transferred)} of ${formatBytes(entry.size)} · `;
 }
 
 /** The Transfers panel: one row per transfer, expanding to every file as `from → to`. */
@@ -94,8 +114,9 @@ export class TransferLogProvider implements vscode.TreeDataProvider<TransferNode
 		}
 
 		const item = new vscode.TreeItem(path.basename(node.localPath ?? node.to), vscode.TreeItemCollapsibleState.None);
-		item.description = `${ENTRY_NOTES[node.status]}${node.from} → ${node.to}`;
-		item.tooltip = `${node.from}\n→ ${node.to}${node.error ? `\n\n${node.error}` : ''}`;
+		item.description = `${describeEntryProgress(node)}${ENTRY_NOTES[node.status]}${node.from} → ${node.to}`;
+		const size = node.size !== undefined ? `\n\n${formatBytes(node.size)}` : '';
+		item.tooltip = `${node.from}\n→ ${node.to}${size}${node.error ? `\n\n${node.error}` : ''}`;
 		item.iconPath = ENTRY_ICONS[node.status];
 		// Opening the local side lets you check what was sent or received; ignored downloads never got there.
 		if (node.localPath && (node.status === 'done' || node.status === 'kept')) {

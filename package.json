@@ -3,7 +3,7 @@
   "displayName": "Remote Host Explorer",
   "description": "A fast and lightweight PhpStorm-style Remote Host manager for VS Code. Features a friendly GUI for server configuration, background upload-on-save, and direct remote file management over SFTP, FTPS, and FTP.",
   "icon": "media/icon.png",
-  "version": "0.1.9",
+  "version": "0.2.0",
   "license": "MIT",
   "publisher": "raufkerimov",
   "author": {

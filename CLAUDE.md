@@ -115,6 +115,7 @@ remote-host-explorer/
 │   │   ├── localPath.ts      # Local path normalisation + case-aware containment
 │   │   ├── remotePath.ts     # POSIX remote path helpers + cache path sanitiser
 │   │   ├── glob.ts           # Minimal glob matcher for ignoreGlobs
+│   │   ├── format.ts         # `formatBytes` / `formatDuration` for transfer progress
 │   │   └── permissions.ts    # Octal/`rwx` formatting and parsing for Change Permissions
 │   ├── webview/
 │   │   ├── ServerFormPanel.ts # Webview host for the server form (no markup in TS)
@@ -285,6 +286,13 @@ remote-host-explorer/
   transfer sends, skips, keeps, or fails on must be reported through `run.log` (`logUpload` /
   `logDownload` in `transfer.ts`); transfers outside it (saving an opened remote file) write to
   `transferLog` directly. Show completion messages with `notifyTransfer` so they offer Show Transfers.
+- Byte progress: `RemoteClient.get`/`put` take an optional `TransferProgressListener` (SFTP `step`, FTP
+  `trackProgress` — per connection, safe only because each queue runs one transfer at a time). Send a
+  file's contents through `sendFile` in `transfer.ts`: it `run.begin`s a `running` entry, feeds
+  `run.advance`, and `run.log`s the same entry object when it ends (`TransferLog.add` updates a begun
+  entry in place). Call `run.expect(bytes)` with the planned size before sending, or the percentage has
+  nothing to measure against. The notification's bar is driven from the record by
+  `withTransferProgress`; don't report `increment` from transfer code.
 - Several profiles may map the same local folder (dev/prod). Explicit actions resolve every candidate
   with `resolveServersForLocalPath` and ask via `pickServerForLocalFiles`, a QuickPick (a dialog with a
   button per server was tried and rejected: it doesn't scale to many servers); never remembered, so prod

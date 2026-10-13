@@ -161,7 +161,7 @@ export function registerTransferCommands(services: CommandServices): vscode.Disp
 				const summary = await withTransferProgress(`Downloading ${mapped.length} item(s)`, async run => {
 					for (const { node, localTarget } of mapped) {
 						const client = await connections.getClient(node.server);
-						await downloadPath(node.server, client, node.entry.path, localTarget, node.entry.isDirectory, run);
+						await downloadPath(node.server, client, node.entry.path, localTarget, node.entry.isDirectory, run, node.entry.size);
 					}
 				});
 				if (!summary) {
@@ -194,7 +194,7 @@ export function registerTransferCommands(services: CommandServices): vscode.Disp
 							continue;
 						}
 						const client = await connections.getClient(node.server);
-						await downloadPath(node.server, client, node.entry.path, path.join(folder, name), node.entry.isDirectory, run);
+						await downloadPath(node.server, client, node.entry.path, path.join(folder, name), node.entry.isDirectory, run, node.entry.size);
 					}
 				});
 				if (!summary) {
