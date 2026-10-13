@@ -71,13 +71,14 @@ remote-host-explorer/
 │   ├── remote-hosts.schema.json # Schema for .vscode/remote-hosts.json (items mirror the setting)
 │   ├── serverForm.html       # Form markup; extension substitutes {{CSP}}/{{NONCE}}/{{...}} tokens
 │   ├── serverForm.css
-│   └── serverForm.js         # Webview script; reads state from a JSON bootstrap block
+│   ├── serverForm.js         # Webview script; reads state from a JSON bootstrap block
+│   └── serversWelcome.{html,css} # Remote Hosts empty state (no script; one command link)
 ├── src/
 │   ├── extension.ts          # Activation only: wiring, context keys, save listener
 │   ├── commands/
-│   │   ├── shared.ts         # CommandServices, clipboard, `resolveSelection`, `guarded()`, server picker
+│   │   ├── shared.ts         # CommandServices, `resolveSelection`, `guarded()`, server picker
 │   │   ├── serverCommands.ts # add/edit/duplicate/remove/test/connect/disconnect/SSH terminal
-│   │   ├── fileCommands.ts   # open/new file+folder/rename/delete/copy/cut/paste/backup/copy-path
+│   │   ├── fileCommands.ts   # open/new file+folder/rename/delete/backup/copy-path/chmod
 │   │   ├── compareCommands.ts # Compare with Remote/Local (read-only content provider), Reveal in Remote Hosts
 │   │   ├── syncCommands.ts   # Sync a mapped folder: compare, review in a multi-select list, transfer
 │   │   └── transferCommands.ts # upload/download (tree + Explorer, multi-select), Git changes, auto-upload-on-save
@@ -94,9 +95,10 @@ remote-host-explorer/
 │   │   ├── SftpClient.ts     # SFTP implementation (ssh2-sftp-client)
 │   │   ├── FtpClient.ts      # FTP/FTPS implementation (basic-ftp) with a serial operation queue
 │   │   ├── clientFactory.ts  # Client factory by protocol, default ports
-│   │   ├── moveItems.ts      # Shared move logic for drag-and-drop and cut/paste
+│   │   ├── moveItems.ts      # Move logic for drag-and-drop inside the tree
+│   │   ├── uploadInto.ts     # Upload into a chosen remote folder (drops, Upload Here, unmapped) + folder picker
 │   │   ├── ConnectionManager.ts # Connection pool, in-flight dedupe, state change events
-│   │   ├── hostKeys.ts       # Trust-on-first-use SSH host key store
+│   │   ├── hostKeys.ts       # Trust-on-first-use SSH host keys + FTPS certificates accepted for another name
 │   │   ├── transfer.ts       # Recursive upload/download/copy: plan, then parallel transfer
 │   │   ├── transferLog.ts    # In-memory per-file transfer history + `notifyTransfer` (Show Transfers)
 │   │   ├── remoteState.ts    # `knownFileStates`: each file's state after our last transfer (globalState)
@@ -115,7 +117,8 @@ remote-host-explorer/
 │   │   ├── glob.ts           # Minimal glob matcher for ignoreGlobs
 │   │   └── permissions.ts    # Octal/`rwx` formatting and parsing for Change Permissions
 │   ├── webview/
-│   │   └── ServerFormPanel.ts # Webview host for the server form (no markup in TS)
+│   │   ├── ServerFormPanel.ts # Webview host for the server form (no markup in TS)
+│   │   └── ServersWelcomeView.ts # Empty-state webview shown instead of the tree while no server exists
 │   └── test/                 # Mocha suites (pure logic + an activation smoke test)
 ```
 
@@ -156,6 +159,13 @@ remote-host-explorer/
 - `copy` never buffers a whole file: SFTP pipes `get` into `put` through a `PassThrough` (destroying the
   pipe if the read fails, or the write hangs); FTP stages through a temp file on the transfer connection.
 - Host keys, private keys, and rsync are SFTP-only; guard those paths with `protocol === 'sftp'`.
+- FTPS certificates: Node verifies the chain; only the host name check can be waived, through a
+  `certificatePolicy` (`HostKeyStore.certificatePolicyFor`) that accepts a certificate's names for a
+  host:port once the user confirms. Same two-phase shape as host keys (`checkServerIdentity` must answer
+  synchronously). Never set `rejectUnauthorized: false`.
+- The server form's Test/Browse use `hostKeys.draft()`: trust accepted there stays in memory, and
+  `handleSubmit` persists only the saved endpoint's entry with `keepFrom`. Trust is keyed by host:port,
+  so removing a profile forgets it only when no other profile `sharesEndpoint`.
 
 ### 2. Secrets & Credentials Security
 - Passwords and key passphrases **MUST NEVER** be stored in settings or `remote-hosts.json`. Use
@@ -183,7 +193,7 @@ remote-host-explorer/
 
 ### 2a. Production Servers
 - `production: true` profiles must be guarded: every action that changes server files calls
-  `confirmProductionChange(server, action)` first (uploads, drops, moves, renames, new items, paste,
+  `confirmProductionChange(server, action)` first (uploads, drops, moves, renames, new items,
   chmod, sync/Git uploads). Saves and auto-upload pass `{ repeated: true }`, which may be waived until
   reload; explicit actions always ask. Delete already confirms, so it adds `productionNote` to that
   dialog instead of a second one. Picking the server from `pickServerForLocalFiles` does not count as
@@ -241,25 +251,32 @@ remote-host-explorer/
   `menus.commandPalette` entry with `"when": "false"`.
 - `remoteHostExplorer.activeEditorMapped` / `remoteHostExplorer.hasMappings` context keys gate the
   editor-title and Explorer contributions; they are refreshed in `extension.ts`.
-- Upload is Explorer-only and Download to Local is tree-only. The Explorer's upload is greyed out via
-  `enablement` on `resourcePath`/`resourceDirname in remoteHostExplorer.mappedFolders`: when clauses
-  can't test "is inside", so `MappedFolderIndex` lists every mapped local folder (ignored folders listed
-  but not entered, capped at `MAX_INDEXED_FOLDERS`, beyond which `mappedFoldersIncomplete` enables it).
+- Download to Local is tree-only. Upload works without mappings: **Upload to Remote Host** (Explorer)
+  uses the mapping when one exists and otherwise asks for a server and a remote folder
+  (`pickRemoteFolder`); **Upload Here...** (`uploadHere`, tree folder/server rows) opens a local picker.
+  Mapping-only Explorer actions (Sync, Reveal) are greyed out via `enablement` on
+  `resourcePath`/`resourceDirname in remoteHostExplorer.mappedFolders`: when clauses can't test "is
+  inside", so `MappedFolderIndex` lists every mapped local folder (ignored folders listed but not
+  entered, capped at `MAX_INDEXED_FOLDERS`, beyond which `mappedFoldersIncomplete` enables it).
 - VS Code's Explorer rejects drops that start in another tree view, so dragging tree items into the
   Explorer cannot work. Downloads to an arbitrary folder go through **Download to Folder...**
   (`downloadRemoteItemTo`) instead.
 - **Multi-select**: the tree uses `canSelectMany`, so context-menu handlers receive
   `(clickedNode, selectedNodes)` and keybindings receive nothing. Always resolve targets with
   `resolveSelection(clicked, selected, treeView.selection)`, and drop children of selected folders with
-  `withoutNestedSelections` before acting. Single-item actions (rename, new file, paste target) use
+  `withoutNestedSelections` before acting. Single-item actions (rename, new file) use
   `!listMultiSelection` in their `when` clause.
 - File/directory rows have context values `remoteHostExplorer.{file|directory}.{protocol}.{mapped|unmapped}`
   (`fileContextValue`); server rows `remoteHostExplorer.server.{connected|disconnected}.{protocol}`
   (`serverContextValue`, where "connected" includes a dropped session). Match them with a regex, never
   `==`; a test checks the menu regexes against real values. Actions that need a `localPath` use a
   command `enablement` of `viewItem =~ /\.mapped$/` so they appear greyed out rather than hidden.
-- Menus and keybindings for the tree must use tree-specific commands (e.g. `downloadRemoteItem`) rather
-  than sharing an Explorer command, because `enablement` applies everywhere a command appears.
+- Menus for the tree must use tree-specific commands (e.g. `downloadRemoteItem`) rather than sharing an
+  Explorer command, because `enablement` applies everywhere a command appears.
+- **No keybindings on VS Code's standard editing keys** (copy, cut, paste, delete, and the like). A
+  `focusedView == remoteHostExplorer.servers` clause did not keep them out of the Explorer, and they broke
+  its own copy/paste/delete. Tree actions live in the context menu; files move between the tree and
+  local folders by dropping onto the tree (upload), **Upload to**, and **Download**.
 
 ### 8. Transfers
 - All recursive work lives in `remote/transfer.ts` and runs inside `withTransferProgress`, which
@@ -285,8 +302,9 @@ remote-host-explorer/
 - Folder transfers are two-phase: a sequential **plan** (create directories, apply ignore patterns, ask
   every overwrite question) and then `runWithLimit` over the planned files — `SFTP_PARALLEL_TRANSFERS`
   for SFTP, 1 for FTP. Never prompt from inside the parallel phase; concurrent modals would interleave.
-- Tree drops accept `text/uri-list` (file manager / Explorer) and upload through `uploadPath`, asking
-  `promptForConflict` before replacing an existing remote item.
+- Uploads into a chosen remote folder (tree drops of `text/uri-list`, **Upload Here...**, unmapped
+  Explorer uploads) all go through `uploadIntoFolder` (`remote/uploadInto.ts`), which runs the
+  production guard and asks `promptForConflict` before replacing an existing remote item.
 - A profile has any number of mappings (`mappings: { localPath, remotePath? }[]`, `remotePath`
   defaulting to `remoteRoot`), plus the single legacy `localPath`/`remoteMappedPath` pair older versions
   saved; the form rewrites both into `mappings`. Always read them through `folderMappings(server)`, and
@@ -314,10 +332,13 @@ remote-host-explorer/
 - Connection changes go through `refreshConnectionState`, which also redraws the idle server rows in
   the same update: VS Code only pulls a non-expandable row's icon into the arrow column while no
   sibling can expand, and computes it when the row is drawn, so otherwise rows shift sideways.
-- Drag-and-drop and cut/paste both move through `moveRemoteItems` (`remote/moveItems.ts`), which owns
+- Drag-and-drop inside the tree moves through `moveRemoteItems` (`remote/moveItems.ts`), which owns
   the no-op, move-into-itself, and replace/skip/cancel conflict rules. Don't reimplement a move loop.
 
 ### 10. Webview
+- The Remote Hosts empty state is a webview view (`remoteHostExplorer.serversWelcome`), not
+  `viewsWelcome`, so it can be centred. `remoteHostExplorer.noServers` swaps it with the tree; it is set
+  only after `whenServerProfilesLoaded()`, so the tree is what shows while profiles load.
 - No user or profile data may be interpolated into markup. `media/serverForm.html` is a static
   template with `{{TOKEN}}` placeholders; values reach the page through the JSON bootstrap block.
 - CSP: `default-src 'none'`, styles from `webview.cspSource`, scripts by cryptographic nonce only.

@@ -11,7 +11,7 @@ workflow in the spirit of PhpStorm's Remote Host tool. Works over **SFTP**, **FT
   upload it back.
 - **Safe saving**: if a file changed or was deleted on the server since you opened it, you're asked
   before anything is overwritten.
-- **File operations**: create files and folders, rename, delete, copy, paste, back up, and move — for
+- **File operations**: create files and folders, rename, delete, back up, and move — for
   one item or many at once.
 - **Upload and download** files and whole folders between your project and the server, including
   **upload on save** and dragging files in from your file manager. Folder transfers over SFTP send
@@ -53,12 +53,14 @@ it matches what your hosting provider or administrator gives you.
 
 - **Open a file** by clicking it. Saving uploads your changes.
 - **Right-click** a file, folder, or server for all actions.
-- **Select several items** with `Cmd`-click / `Ctrl`-click or `Shift`-click to delete, copy, back up, or
-  download them together.
+- **Select several items** with `Cmd`-click / `Ctrl`-click or `Shift`-click to delete, back up, or download
+  them together.
 - **Download to Folder...** saves items into any folder you choose, whether or not the server has a
   folder mapping.
+- **Upload Here...** on a folder or server picks files or folders on your computer and uploads them
+  into it, whether or not the server has a folder mapping.
 - **Create** files and folders with **New File...** and **New Folder...** on a folder or the server.
-- **Move items** by dragging them onto a folder, or with **Cut** then **Paste**.
+- **Move items** by dragging them onto a folder.
 - **Upload by dragging** files or folders from Finder, File Explorer, or VS Code's Explorer onto a folder
   in the view. If an item with the same name already exists, you choose **Replace** or **Skip**.
 - **Open SSH Terminal** on an SFTP server or folder opens a shell in VS Code's terminal, in that folder.
@@ -66,15 +68,6 @@ it matches what your hosting provider or administrator gives you.
 - **Lost connections** are picked up again: if a connected server drops (for example after sleep or a
   network change), its dot turns yellow and the next action — expanding a folder, opening a file,
   uploading — reconnects.
-- **Keyboard shortcuts** (while the view is focused):
-
-  | Action | Windows / Linux | macOS |
-  | --- | --- | --- |
-  | Copy | `Ctrl+C` | `Cmd+C` |
-  | Cut | `Ctrl+X` | `Cmd+X` |
-  | Paste | `Ctrl+V` | `Cmd+V` |
-  | Delete | `Delete` | `Cmd+Backspace` |
-
 - **Create Backup** makes a timestamped copy next to the file, such as `index_2026-09-13_142501.php`.
 - **Change Permissions...** sets permissions on the selected files and folders, as `644` or
   `rw-r--r--`. Hover over a file to see its current permissions. Over FTP this works when the server
@@ -104,8 +97,9 @@ plugin:
 The Remote Hosts view then shows all of `/var/www/site`, while uploads, downloads, Compare, and upload
 on save use only the mapped folders. If mapped folders are nested, the innermost one is used.
 
-- **Upload**: right-click files or folders in the Explorer and choose **Upload to Remote Host**. It is
-  greyed out for items outside every mapped local folder.
+- **Upload**: right-click files or folders in the Explorer and choose **Upload to Remote Host**. Items
+  in a mapped folder go to the matching server folder. For items outside every mapped folder, you pick
+  the server and then browse to the folder to upload into.
 - **Several servers for one folder** (for example dev and prod): uploading asks which server to use,
   every time, from a list that shows where each would put the files. With one server, it uploads
   right away. **Compare with Remote**, **Sync**, and **Reveal** ask the same way.
@@ -123,6 +117,8 @@ on save use only the mapped folders. If mapped folders are nested, the innermost
   them into their mapped local folder. It is greyed out for items outside every mapped server folder.
 - **Download anywhere**: choose **Download to Folder...** instead and pick a folder. This works for any
   item, with or without a mapping.
+- **Upload anywhere**: right-click a folder or server in the Remote Hosts view and choose **Upload
+  Here...**, or drag files onto it. This works with or without a mapping.
 - **Existing local files are never replaced silently.** If a download would overwrite a file on your
   computer, you choose **Overwrite**, **Skip**, or apply either to all remaining files. For a folder,
   all of these questions come first, before any file is transferred.
@@ -218,7 +214,14 @@ saved passwords.
 - **SSH host keys** are remembered the first time you connect. If a server's key later changes, you
   get a prominent warning, because that can mean the connection is being intercepted.
 - **FTPS** checks the server's TLS certificate and refuses invalid or self-signed ones. Port 990 uses
-  implicit TLS; any other port uses explicit TLS (AUTH TLS).
+  implicit TLS; any other port uses explicit TLS (AUTH TLS). A valid certificate issued for a different
+  host name, as shared hosting often uses, is only accepted after you confirm it, and you're asked
+  again if its names change.
+- **Trusted host keys and certificates** are remembered on this computer only. Ones you accept with
+  **Test Connection** or **Browse** in the server form are kept only if you save the server. To clear
+  one, right-click the server and choose **Forget Host Key** (SFTP) or **Forget Accepted Certificate**
+  (FTPS); the next connection asks again. Removing a server clears them too, unless another server
+  uses the same host and port.
 - **SSH agent** authentication uses the keys your agent holds; the extension never sees or stores them.
 - **FTP** sends your password and files **unencrypted**. The form warns you when you select it. Use
   SFTP or FTPS whenever the server supports them.
@@ -300,6 +303,17 @@ hosting provider, then choose **Connect and Remember**.
 The server presented a different key than last time. If your provider rebuilt or migrated the server,
 choose **Trust the New Key**. If you don't know why it changed, don't connect — ask your provider.
 
+**"The TLS certificate of … was issued for a different host name."**
+Common on shared hosting: the server presents your provider's certificate (for example
+`*.prod.sxb1.secureserver.net`) instead of one for your domain. Check that the names listed belong to
+your hosting provider, then choose **Trust and Connect**. Alternatively, set **Host** to the server
+name your provider gives for FTP, which matches the certificate.
+
+**"The TLS certificate of … now names different hosts."**
+The server presented a certificate for other names than the one you accepted. If your provider moved
+your site to another server, choose **Trust the New Certificate**. If you don't know why it changed,
+don't connect — ask your provider.
+
 **FTPS fails with "self-signed certificate".**
 The server's certificate isn't trusted, so the connection is refused on purpose. Use SFTP if the
 server supports it, or ask your hosting provider for a valid certificate.
@@ -315,10 +329,6 @@ Check that the path in **Private key path** exists and that your user can read t
 **"Download to Local" is greyed out.**
 The item is outside every mapped server folder. Edit the server and add a folder mapping that covers
 it, or use **Download to Folder...** to save it anywhere.
-
-**"Upload to Remote Host" is greyed out in the Explorer.**
-The item is outside every mapped local folder. Edit the server and add a folder mapping for it. A
-folder created outside VS Code becomes available about a second later.
 
 **A file wasn't uploaded on save.**
 Check that **Auto-upload on save** is on for the server, the file is inside its local folder, and it
@@ -355,7 +365,7 @@ that `ssh` can log in to the server with your key without asking for a password.
 
 ## Known limitations
 
-- Copying or moving between two different servers isn't supported.
+- Moving items between two different servers isn't supported.
 - Sync never deletes files, on either side. Change Permissions applies to the selected items only, not
   to what's inside a folder.
 - **From SSH Config...** reads `Host` entries (including `Include`d files) but can't use `ProxyJump`,

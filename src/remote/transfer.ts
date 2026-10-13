@@ -610,35 +610,3 @@ async function planDownloadDirectory(
 		}
 	}
 }
-
-/** Recursively copies a remote file or directory to another remote path on the same server. */
-export async function copyRemoteTree(
-	server: ServerProfile,
-	client: RemoteClient,
-	fromPath: string,
-	toPath: string,
-	isDirectory: boolean,
-	run: TransferRun
-): Promise<void> {
-	throwIfCancelled(run.token);
-
-	if (!isDirectory) {
-		run.progress.report({ message: fromPath });
-		try {
-			await client.copy(fromPath, toPath);
-		} catch (err) {
-			run.log?.({ from: remoteLabel(server, fromPath), to: remoteLabel(server, toPath), status: 'failed', error: (err as Error).message });
-			throw err;
-		}
-		run.log?.({ from: remoteLabel(server, fromPath), to: remoteLabel(server, toPath), status: 'done' });
-		run.summary.transferred += 1;
-		return;
-	}
-
-	await client.mkdir(toPath);
-	const entries = await client.list(fromPath);
-	for (const entry of entries) {
-		throwIfCancelled(run.token);
-		await copyRemoteTree(server, client, entry.path, joinRemote(toPath, entry.name), entry.isDirectory, run);
-	}
-}

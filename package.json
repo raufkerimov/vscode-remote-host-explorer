@@ -3,7 +3,7 @@
   "displayName": "Remote Host Explorer",
   "description": "A fast and lightweight PhpStorm-style Remote Host manager for VS Code. Features a friendly GUI for server configuration, background upload-on-save, and direct remote file management over SFTP, FTPS, and FTP.",
   "icon": "media/icon.png",
-  "version": "0.1.8",
+  "version": "0.1.9",
   "license": "MIT",
   "publisher": "raufkerimov",
   "author": {
@@ -65,7 +65,15 @@
         {
           "id": "remoteHostExplorer.servers",
           "name": "Remote Hosts",
-          "icon": "media/remote-host-explorer.svg"
+          "icon": "media/remote-host-explorer.svg",
+          "when": "!remoteHostExplorer.noServers"
+        },
+        {
+          "type": "webview",
+          "id": "remoteHostExplorer.serversWelcome",
+          "name": "Remote Hosts",
+          "icon": "media/remote-host-explorer.svg",
+          "when": "remoteHostExplorer.noServers"
         }
       ],
       "remoteHostExplorerTransfers": [
@@ -78,12 +86,8 @@
     },
     "viewsWelcome": [
       {
-        "view": "remoteHostExplorer.servers",
-        "contents": "No remote hosts configured yet.\n[Add Server...](command:remoteHostExplorer.addServer)"
-      },
-      {
         "view": "remoteHostExplorer.transfers",
-        "contents": "Uploads, downloads, and copies made in this window are listed here, file by file."
+        "contents": "Uploads and downloads made in this window are listed here, file by file."
       }
     ],
     "commands": [
@@ -113,6 +117,16 @@
       {
         "command": "remoteHostExplorer.testConnection",
         "title": "Test Connection",
+        "category": "Remote Host Explorer"
+      },
+      {
+        "command": "remoteHostExplorer.forgetHostKey",
+        "title": "Forget Host Key",
+        "category": "Remote Host Explorer"
+      },
+      {
+        "command": "remoteHostExplorer.forgetCertificate",
+        "title": "Forget Accepted Certificate",
         "category": "Remote Host Explorer"
       },
       {
@@ -159,8 +173,7 @@
         "command": "remoteHostExplorer.uploadFile",
         "title": "Upload to Remote Host",
         "category": "Remote Host Explorer",
-        "icon": "$(cloud-upload)",
-        "enablement": "resourceScheme == file && (remoteHostExplorer.mappedFoldersIncomplete || resourcePath in remoteHostExplorer.mappedFolders || resourceDirname in remoteHostExplorer.mappedFolders)"
+        "icon": "$(cloud-upload)"
       },
       {
         "command": "remoteHostExplorer.uploadGitChanges",
@@ -217,23 +230,13 @@
         "category": "Remote Host Explorer"
       },
       {
-        "command": "remoteHostExplorer.copyFile",
-        "title": "Copy",
-        "category": "Remote Host Explorer"
-      },
-      {
-        "command": "remoteHostExplorer.cutFile",
-        "title": "Cut",
-        "category": "Remote Host Explorer"
-      },
-      {
-        "command": "remoteHostExplorer.pasteFile",
-        "title": "Paste",
-        "category": "Remote Host Explorer"
-      },
-      {
         "command": "remoteHostExplorer.backupFile",
         "title": "Create Backup",
+        "category": "Remote Host Explorer"
+      },
+      {
+        "command": "remoteHostExplorer.uploadHere",
+        "title": "Upload Here...",
         "category": "Remote Host Explorer"
       },
       {
@@ -272,34 +275,16 @@
         "enablement": "viewItem =~ /\\.mapped$/"
       }
     ],
-    "keybindings": [
-      {
-        "command": "remoteHostExplorer.copyFile",
-        "key": "ctrl+c",
-        "mac": "cmd+c",
-        "when": "focusedView == remoteHostExplorer.servers && !inputFocus"
-      },
-      {
-        "command": "remoteHostExplorer.cutFile",
-        "key": "ctrl+x",
-        "mac": "cmd+x",
-        "when": "focusedView == remoteHostExplorer.servers && !inputFocus"
-      },
-      {
-        "command": "remoteHostExplorer.pasteFile",
-        "key": "ctrl+v",
-        "mac": "cmd+v",
-        "when": "focusedView == remoteHostExplorer.servers && !inputFocus"
-      },
-      {
-        "command": "remoteHostExplorer.deleteRemoteItem",
-        "key": "delete",
-        "mac": "cmd+backspace",
-        "when": "focusedView == remoteHostExplorer.servers && !inputFocus"
-      }
-    ],
     "menus": {
       "commandPalette": [
+        {
+          "command": "remoteHostExplorer.forgetHostKey",
+          "when": "false"
+        },
+        {
+          "command": "remoteHostExplorer.forgetCertificate",
+          "when": "false"
+        },
         {
           "command": "remoteHostExplorer.openRemoteFile",
           "when": "false"
@@ -325,19 +310,11 @@
           "when": "false"
         },
         {
-          "command": "remoteHostExplorer.copyFile",
-          "when": "false"
-        },
-        {
-          "command": "remoteHostExplorer.cutFile",
-          "when": "false"
-        },
-        {
-          "command": "remoteHostExplorer.pasteFile",
-          "when": "false"
-        },
-        {
           "command": "remoteHostExplorer.backupFile",
+          "when": "false"
+        },
+        {
+          "command": "remoteHostExplorer.uploadHere",
           "when": "false"
         },
         {
@@ -388,7 +365,7 @@
       "view/title": [
         {
           "command": "remoteHostExplorer.addServer",
-          "when": "view == remoteHostExplorer.servers",
+          "when": "view == remoteHostExplorer.servers || view == remoteHostExplorer.serversWelcome",
           "group": "navigation"
         },
         {
@@ -454,6 +431,16 @@
           "group": "2_modification@3"
         },
         {
+          "command": "remoteHostExplorer.forgetHostKey",
+          "when": "view == remoteHostExplorer.servers && viewItem =~ /^remoteHostExplorer\\.server\\.[a-z]+\\.sftp$/",
+          "group": "3_trust@1"
+        },
+        {
+          "command": "remoteHostExplorer.forgetCertificate",
+          "when": "view == remoteHostExplorer.servers && viewItem =~ /^remoteHostExplorer\\.server\\.[a-z]+\\.ftps$/",
+          "group": "3_trust@1"
+        },
+        {
           "command": "remoteHostExplorer.openRemoteFile",
           "when": "view == remoteHostExplorer.servers && viewItem =~ /^remoteHostExplorer\\.file\\./",
           "group": "1_open@1"
@@ -467,6 +454,11 @@
           "command": "remoteHostExplorer.newFolder",
           "when": "view == remoteHostExplorer.servers && !listMultiSelection && (viewItem =~ /^remoteHostExplorer\\.directory\\./ || viewItem =~ /^remoteHostExplorer\\.server\\.connected\\./)",
           "group": "1_open@3"
+        },
+        {
+          "command": "remoteHostExplorer.uploadHere",
+          "when": "view == remoteHostExplorer.servers && !listMultiSelection && viewItem =~ /^remoteHostExplorer\\.(directory|server)\\./",
+          "group": "2_transfer@0"
         },
         {
           "command": "remoteHostExplorer.downloadRemoteItem",
@@ -487,21 +479,6 @@
           "command": "remoteHostExplorer.backupFile",
           "when": "view == remoteHostExplorer.servers && viewItem =~ /^remoteHostExplorer\\.file\\./",
           "group": "2_transfer@4"
-        },
-        {
-          "command": "remoteHostExplorer.cutFile",
-          "when": "view == remoteHostExplorer.servers && viewItem =~ /^remoteHostExplorer\\.(file|directory)\\./",
-          "group": "3_ops@1"
-        },
-        {
-          "command": "remoteHostExplorer.copyFile",
-          "when": "view == remoteHostExplorer.servers && viewItem =~ /^remoteHostExplorer\\.(file|directory)\\./",
-          "group": "3_ops@2"
-        },
-        {
-          "command": "remoteHostExplorer.pasteFile",
-          "when": "view == remoteHostExplorer.servers && !listMultiSelection && (viewItem =~ /^remoteHostExplorer\\.directory\\./ || viewItem =~ /^remoteHostExplorer\\.server\\.connected\\./)",
-          "group": "3_ops@3"
         },
         {
           "command": "remoteHostExplorer.copyRemotePath",
@@ -542,7 +519,7 @@
       "explorer/context": [
         {
           "command": "remoteHostExplorer.uploadFile",
-          "when": "remoteHostExplorer.hasMappings && resourceScheme == file",
+          "when": "!remoteHostExplorer.noServers && resourceScheme == file",
           "group": "remoteHostExplorer"
         },
         {
@@ -737,6 +714,7 @@
     "watch:esbuild": "node esbuild.js --watch",
     "watch:tsc": "tsc --noEmit --watch --project tsconfig.json",
     "package": "npm run check-types && npm run lint && node esbuild.js --production",
+    "vsix": "npx @vscode/vsce package",
     "compile-tests": "tsc -p . --outDir out",
     "watch-tests": "tsc -p . -w --outDir out",
     "check-types": "tsc --noEmit",

@@ -1,6 +1,6 @@
 import * as vscode from 'vscode';
-import { removeServerProfile, type ServerProfile } from '../config/serverConfig';
-import { DEFAULT_SFTP_PORT } from '../remote/clientFactory';
+import { getServerProfiles, removeServerProfile, type ServerProfile } from '../config/serverConfig';
+import { defaultPortFor } from '../remote/clientFactory';
 import { SftpRemoteClient } from '../remote/SftpClient';
 import { remoteShellCommand, SshPseudoterminal } from '../remote/sshTerminal';
 import type { TreeNode } from '../tree/RemoteTreeProvider';
@@ -12,6 +12,27 @@ import { guarded, pickServer, type CommandServices } from './shared';
 async function handleServerSaved(services: CommandServices, profile: ServerProfile): Promise<void> {
 	await services.connections.disconnect(profile.id);
 	services.treeProvider.refresh();
+}
+
+/**
+ * The trust remembered for a server's endpoint: its SSH host key, or for FTPS the certificate accepted
+ * for another host name. Plain FTP has neither.
+ */
+const TRUST = {
+	sftp: { name: 'host key', forget: 'forget' },
+	ftps: { name: 'accepted certificate', forget: 'forgetCertificate' },
+} as const;
+
+/** Trust is stored per host:port, so a profile is removed without forgetting it while another one uses it. */
+export function sharesEndpoint(server: ServerProfile, others: readonly ServerProfile[]): boolean {
+	const port = server.port ?? defaultPortFor(server.protocol);
+	return others.some(
+		other =>
+			other.id !== server.id &&
+			other.protocol === server.protocol &&
+			other.host === server.host &&
+			(other.port ?? defaultPortFor(other.protocol)) === port
+	);
 }
 
 export function registerServerCommands(services: CommandServices): vscode.Disposable[] {
@@ -81,13 +102,36 @@ export function registerServerCommands(services: CommandServices): vscode.Dispos
 				}
 				await connections.disconnect(server.id);
 				await secrets.deleteAll(server.id);
-				if (server.protocol === 'sftp') {
-					// Host keys are an SSH concept; FTP profiles never stored one.
-					await hostKeys.forget(server.host, server.port ?? DEFAULT_SFTP_PORT);
+				const trust = server.protocol === 'ftp' ? undefined : TRUST[server.protocol];
+				// Only profiles of this window are known; one in another project would simply ask again.
+				if (trust && !sharesEndpoint(server, getServerProfiles())) {
+					await hostKeys[trust.forget](server.host, server.port ?? defaultPortFor(server.protocol));
 				}
 				await removeServerProfile(server.id);
 				treeProvider.refresh();
 			})
+		),
+
+		...(['sftp', 'ftps'] as const).map(protocol =>
+			vscode.commands.registerCommand(
+				protocol === 'sftp' ? 'remoteHostExplorer.forgetHostKey' : 'remoteHostExplorer.forgetCertificate',
+				guarded(`Failed to forget the ${TRUST[protocol].name}`, async (node?: { server: ServerProfile }) => {
+					const server = node?.server;
+					if (server?.protocol !== protocol) {
+						return;
+					}
+					const { name, forget } = TRUST[protocol];
+					const port = server.port ?? defaultPortFor(protocol);
+					const endpoint = `${server.host}:${port}`;
+					if (!(await hostKeys[forget](server.host, port))) {
+						void vscode.window.showInformationMessage(`No ${name} is remembered for "${endpoint}".`);
+						return;
+					}
+					void vscode.window.showInformationMessage(
+						`Forgot the ${name} of "${endpoint}". The next connection will ask you to trust it again.`
+					);
+				})
+			)
 		),
 
 		vscode.commands.registerCommand(

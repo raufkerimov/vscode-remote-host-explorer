@@ -132,14 +132,18 @@ suite('mapped folder index', () => {
 		assert.ok(complete);
 	});
 
-	test('the Explorer upload action is enabled by the keys the index sets', () => {
+	test('mapping-only Explorer actions are enabled by the keys the index sets; Upload works unmapped', () => {
 		const manifest = require('../../package.json');
-		const upload = manifest.contributes.commands.find(
-			(command: { command: string }) => command.command === 'remoteHostExplorer.uploadFile'
-		);
-		assert.ok(upload.enablement.includes(`resourcePath in ${CONTEXT_MAPPED_FOLDERS}`));
-		assert.ok(upload.enablement.includes(`resourceDirname in ${CONTEXT_MAPPED_FOLDERS}`));
-		assert.ok(upload.enablement.includes(CONTEXT_MAPPED_FOLDERS_INCOMPLETE));
+		const commandNamed = (name: string) =>
+			manifest.contributes.commands.find((command: { command: string }) => command.command === `remoteHostExplorer.${name}`);
+		for (const name of ['syncWithServer', 'revealInRemoteHosts']) {
+			const { enablement } = commandNamed(name);
+			assert.ok(enablement.includes(`resourcePath in ${CONTEXT_MAPPED_FOLDERS}`), name);
+			assert.ok(enablement.includes(`resourceDirname in ${CONTEXT_MAPPED_FOLDERS}`), name);
+			assert.ok(enablement.includes(CONTEXT_MAPPED_FOLDERS_INCOMPLETE), name);
+		}
+		// Unmapped items ask for a server and folder instead of being greyed out.
+		assert.strictEqual(commandNamed('uploadFile').enablement, undefined);
 	});
 });
 

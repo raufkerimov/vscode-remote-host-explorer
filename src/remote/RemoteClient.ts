@@ -1,3 +1,5 @@
+import type { PeerCertificate } from 'tls';
+
 export interface RemoteFileEntry {
 	name: string;
 	path: string;
@@ -40,6 +42,18 @@ export interface HostKeyPolicy {
 	confirm(hostKey: Buffer): Promise<boolean>;
 }
 
+/**
+ * FTPS: accepting a certificate whose names don't include the host. Shared hosting commonly presents the
+ * provider's certificate (e.g. `*.prod.example-host.net`) to every customer domain. The certificate chain
+ * is still verified by Node; only the host name check can be waived, and only for names the user accepted.
+ */
+export interface CertificatePolicy {
+	/** Synchronous, runs inside the TLS handshake: were this certificate's names accepted for the host? */
+	isTrusted(certificate: PeerCertificate): boolean;
+	/** Runs outside the handshake: ask the user, and persist the decision when accepted. */
+	confirm(certificate: PeerCertificate): Promise<boolean>;
+}
+
 export interface RemoteConnectionOptions {
 	host: string;
 	port?: number;
@@ -58,6 +72,8 @@ export interface RemoteConnectionOptions {
 	 * check is synchronous, and anything it cannot approve is confirmed afterwards and retried.
 	 */
 	hostKeyPolicy?: HostKeyPolicy;
+	/** FTPS only. Without it, a certificate issued for another host name is always refused. */
+	certificatePolicy?: CertificatePolicy;
 }
 
 /**

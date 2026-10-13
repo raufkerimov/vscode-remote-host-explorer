@@ -4,13 +4,7 @@ import { getServerProfiles, whenServerProfilesLoaded, type LocalPathResolution, 
 import type { ConnectionManager } from '../remote/ConnectionManager';
 import type { HostKeyStore } from '../remote/hostKeys';
 import type { RemoteFileCache } from '../editing/RemoteFileCache';
-import type { FileNode, RemoteTreeProvider, TreeNode } from '../tree/RemoteTreeProvider';
-
-/** Items put on the tree's clipboard; `cut` turns the next paste into a move. */
-export interface RemoteClipboard {
-	nodes: FileNode[];
-	mode: 'copy' | 'cut';
-}
+import type { RemoteTreeProvider, TreeNode } from '../tree/RemoteTreeProvider';
 
 /** Everything the command handlers need, assembled once during activation. */
 export interface CommandServices {
@@ -22,7 +16,6 @@ export interface CommandServices {
 	treeProvider: RemoteTreeProvider;
 	treeView: vscode.TreeView<TreeNode>;
 	fileCache: RemoteFileCache;
-	clipboard: { current?: RemoteClipboard };
 }
 
 /**
@@ -60,7 +53,7 @@ export function guarded<TArgs extends unknown[]>(
 	};
 }
 
-export async function pickServer(): Promise<ServerProfile | undefined> {
+export async function pickServer(placeHolder = 'Select a server'): Promise<ServerProfile | undefined> {
 	await whenServerProfilesLoaded();
 	const servers = getServerProfiles();
 	if (servers.length === 0) {
@@ -72,7 +65,7 @@ export async function pickServer(): Promise<ServerProfile | undefined> {
 	}
 	const picked = await vscode.window.showQuickPick(
 		servers.map(server => ({ label: server.name, description: `${server.protocol}://${server.host}`, server })),
-		{ placeHolder: 'Select a server' }
+		{ placeHolder }
 	);
 	return picked?.server;
 }

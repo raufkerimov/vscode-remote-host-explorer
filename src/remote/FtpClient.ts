@@ -4,6 +4,7 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import { Readable, Writable } from 'stream';
+import * as tls from 'tls';
 import {
 	isConnectionLostError,
 	type RemoteClient,
@@ -57,6 +58,8 @@ export class FtpRemoteClient implements RemoteClient {
 	private transferQueue: Promise<unknown> = Promise.resolve();
 	/** Set once the server refused a second connection; transfers then use the main queue. */
 	private singleConnectionOnly = false;
+	/** Certificate refused for its host name that the policy could not approve without asking the user. */
+	private unapprovedCertificate: tls.PeerCertificate | undefined;
 
 	constructor(
 		private readonly options: RemoteConnectionOptions,
@@ -109,7 +112,27 @@ export class FtpRemoteClient implements RemoteClient {
 			// Certificate verification stays on for both TLS modes: a self-signed certificate is rejected
 			// rather than silently trusted.
 			secure: this.secure,
+			// A new object each time: basic-ftp writes into it. Its data connections reuse it, so they
+			// apply the same host name check.
+			secureOptions: this.secure
+				? { checkServerIdentity: (host: string, cert: tls.PeerCertificate) => this.checkServerIdentity(host, cert) }
+				: undefined,
 		};
+	}
+
+	/**
+	 * Node's host name check, except for a certificate the policy accepted for this server. Node calls it
+	 * only after the chain verified, so an untrusted or self-signed certificate never gets here. It must
+	 * answer synchronously; an unknown certificate is remembered and confirmed after the attempt fails.
+	 */
+	private checkServerIdentity(host: string, cert: tls.PeerCertificate): Error | undefined {
+		const error = tls.checkServerIdentity(host, cert);
+		const policy = this.options.certificatePolicy;
+		if (!error || policy?.isTrusted(cert)) {
+			return undefined;
+		}
+		this.unapprovedCertificate = cert;
+		return error;
 	}
 
 	/** The transfer connection, opened on first use; `undefined` when the server won't allow a second one. */
@@ -170,14 +193,34 @@ export class FtpRemoteClient implements RemoteClient {
 		this.client.close();
 		this.closeTransferClient();
 		this.singleConnectionOnly = false;
-		this.client = new BasicFtpClient(TIMEOUT_MS);
+
+		const attempt = async (): Promise<void> => {
+			this.unapprovedCertificate = undefined;
+			this.client.close();
+			this.client = new BasicFtpClient(TIMEOUT_MS);
+			try {
+				await this.client.access(this.accessOptions());
+				this.homeDir = normalizeRemote(await this.client.pwd()) || '/';
+			} catch (err) {
+				this.client.close();
+				throw err;
+			}
+		};
 
 		try {
-			await this.client.access(this.accessOptions());
-			this.homeDir = normalizeRemote(await this.client.pwd()) || '/';
+			await attempt();
 		} catch (err) {
-			this.client.close();
-			throw err;
+			const policy = this.options.certificatePolicy;
+			const certificate = this.unapprovedCertificate;
+			if (!policy || !certificate) {
+				throw err;
+			}
+			// Ask outside the handshake, where the user can take as long as they need.
+			if (!(await policy.confirm(certificate))) {
+				throw new Error('The server\'s certificate was not accepted; the connection was not established.');
+			}
+			// The policy has recorded the certificate's names, so the check now approves it synchronously.
+			await attempt();
 		}
 
 		this.connected = true;

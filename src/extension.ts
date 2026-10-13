@@ -25,10 +25,13 @@ import { autoUploadOnSave, registerTransferCommands } from './commands/transferC
 import { registerCompareCommands } from './commands/compareCommands';
 import { registerSyncCommands } from './commands/syncCommands';
 import type { CommandServices } from './commands/shared';
+import { SERVERS_WELCOME_VIEW_ID, ServersWelcomeView } from './webview/ServersWelcomeView';
 
 /** Context keys that drive `when` clauses for the Explorer and editor-title contributions. */
 const CONTEXT_ACTIVE_EDITOR_MAPPED = 'remoteHostExplorer.activeEditorMapped';
 const CONTEXT_HAS_MAPPINGS = 'remoteHostExplorer.hasMappings';
+/** Swaps the Remote Hosts tree for its welcome view. Unset until profiles load, so the tree shows first. */
+const CONTEXT_NO_SERVERS = 'remoteHostExplorer.noServers';
 
 export async function activate(context: vscode.ExtensionContext) {
 	const outputChannel = vscode.window.createOutputChannel('Remote Host Explorer');
@@ -60,12 +63,12 @@ export async function activate(context: vscode.ExtensionContext) {
 		treeProvider,
 		treeView,
 		fileCache,
-		clipboard: {},
 	};
 
 	// Persisted tracking can outlive the cache files it points at (manual cleanup, storage reset).
 	void fileCache.pruneMissingFiles();
 	updateContextKeys();
+	void updateNoServersContextKey();
 
 	context.subscriptions.push(
 		outputChannel,
@@ -75,6 +78,7 @@ export async function activate(context: vscode.ExtensionContext) {
 		new MappedFolderIndex(outputChannel),
 		new AutoUploadStatus(),
 		treeView,
+		vscode.window.registerWebviewViewProvider(SERVERS_WELCOME_VIEW_ID, new ServersWelcomeView(context.extensionUri)),
 		transferLogProvider,
 		transfersView,
 		vscode.commands.registerCommand('remoteHostExplorer.clearTransfers', () => transferLog.clear()),
@@ -112,6 +116,7 @@ export async function activate(context: vscode.ExtensionContext) {
 		vscode.window.onDidChangeActiveTextEditor(() => updateContextKeys()),
 		onDidChangeServerProfiles(() => {
 			updateContextKeys();
+			void updateNoServersContextKey();
 			treeProvider.refresh();
 		}),
 
@@ -144,6 +149,12 @@ function updateContextKeys(): void {
 
 	void vscode.commands.executeCommand('setContext', CONTEXT_ACTIVE_EDITOR_MAPPED, activeEditorMapped);
 	void vscode.commands.executeCommand('setContext', CONTEXT_HAS_MAPPINGS, hasMappings);
+}
+
+async function updateNoServersContextKey(): Promise<void> {
+	// Before the project files are read, no profiles doesn't mean no servers.
+	await whenServerProfilesLoaded();
+	await vscode.commands.executeCommand('setContext', CONTEXT_NO_SERVERS, getServerProfiles().length === 0);
 }
 
 export function deactivate(): Promise<void> {

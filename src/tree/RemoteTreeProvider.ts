@@ -1,4 +1,3 @@
-import * as path from 'path';
 import * as vscode from 'vscode';
 import {
 	getScopedServerProfiles,
@@ -10,13 +9,12 @@ import {
 } from '../config/serverConfig';
 import type { RemoteFileCache } from '../editing/RemoteFileCache';
 import type { ConnectionManager } from '../remote/ConnectionManager';
-import { moveRemoteItems, promptForConflict } from '../remote/moveItems';
+import { moveRemoteItems } from '../remote/moveItems';
 import { compareEntries, type RemoteFileEntry } from '../remote/RemoteClient';
-import { CancelledError, uploadPath, withTransferProgress } from '../remote/transfer';
-import { notifyTransfer } from '../remote/transferLog';
+import { uploadIntoFolder } from '../remote/uploadInto';
 import { confirmProductionChange, serverRowUri } from '../config/productionGuard';
 import { formatOctal, formatPermissions } from '../util/permissions';
-import { basenameRemote, dirnameRemote, isSameOrInside, joinRemote, normalizeRemote } from '../util/remotePath';
+import { basenameRemote, dirnameRemote, isSameOrInside, normalizeRemote } from '../util/remotePath';
 
 export const REMOTE_TREE_MIME = 'application/vnd.code.tree.remotehostexplorer';
 /** What VS Code puts on a drag from the operating system's file manager or from the Explorer. */
@@ -369,43 +367,8 @@ export class RemoteTreeProvider implements vscode.TreeDataProvider<TreeNode>, vs
 
 		const server = target.server;
 		const targetDir = dropDirectoryOf(target);
-		if (!(await confirmProductionChange(server, `Upload ${local.length} item(s) to ${targetDir}.`))) {
-			return;
-		}
 		try {
-			// Dropping is an explicit request, so it may open a connection the tree doesn't have yet.
-			const client = await this.connections.getClient(server);
-			const summary = await withTransferProgress(`Uploading ${local.length} item(s) to ${server.name}`, async run => {
-				// Every existing item below is confirmed with Replace or Skip, so a second question about
-				// server changes would only repeat it.
-				run.remoteConflicts = 'overwrite';
-				for (const uri of local) {
-					const name = path.basename(uri.fsPath);
-					const remotePath = joinRemote(targetDir, name);
-					const existing = await client.stat(remotePath);
-					if (existing) {
-						const decision = await promptForConflict(
-							name,
-							targetDir,
-							existing.isDirectory
-								? 'Files with the same names inside it will be replaced; other files on the server are kept.'
-								: 'Uploading replaces the file on the server.'
-						);
-						if (decision === 'cancel') {
-							throw new CancelledError();
-						}
-						if (decision === 'skip') {
-							run.summary.skipped += 1;
-							continue;
-						}
-					}
-					await uploadPath(server, this.connections, this.outputChannel, uri.fsPath, remotePath, run);
-				}
-			});
-			if (summary) {
-				const ignored = summary.skipped ? ` (${summary.skipped} skipped)` : '';
-				void notifyTransfer(`Uploaded ${summary.transferred} item(s) to ${targetDir}${ignored}.`);
-			}
+			await uploadIntoFolder(server, this.connections, this.outputChannel, local.map(uri => uri.fsPath), targetDir);
 		} catch (err) {
 			vscode.window.showErrorMessage(`Upload failed: ${(err as Error).message}`);
 		} finally {
@@ -415,7 +378,7 @@ export class RemoteTreeProvider implements vscode.TreeDataProvider<TreeNode>, vs
 }
 
 /** Folder that items dropped on `target` land in: the server root, the folder itself, or a file's folder. */
-function dropDirectoryOf(target: TreeNode): string {
+export function dropDirectoryOf(target: TreeNode): string {
 	if (target.kind === 'server') {
 		return normalizeRemote(target.server.remoteRoot);
 	}

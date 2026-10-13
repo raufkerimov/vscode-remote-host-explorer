@@ -9,14 +9,13 @@ import {
 	type ServerProfile,
 } from '../config/serverConfig';
 import { downloadPath, uploadPath, withTransferProgress, type TransferSummary } from '../remote/transfer';
-import { withoutNestedSelections, type FileNode, type TreeNode } from '../tree/RemoteTreeProvider';
+import { dropDirectoryOf, withoutNestedSelections, type FileNode, type TreeNode } from '../tree/RemoteTreeProvider';
+import { pickRemoteFolder, uploadIntoFolder } from '../remote/uploadInto';
+import { isSameOrInside } from '../util/localPath';
 import { dirnameRemote, toSafeRelativePath } from '../util/remotePath';
 import { notifyTransfer } from '../remote/transferLog';
 import { confirmProductionChange } from '../config/productionGuard';
-import { guarded, pickServerForLocalFiles, resolveSelection, type CommandServices } from './shared';
-
-const NO_MAPPING_MESSAGE =
-	'No server mapping found for this file. Add a folder mapping to a server profile first.';
+import { guarded, pickServer, pickServerForLocalFiles, resolveSelection, type CommandServices } from './shared';
 
 /** All selected Explorer items, or the active editor when invoked without an Explorer item. */
 function localTargets(clicked?: vscode.Uri, selected?: vscode.Uri[]): vscode.Uri[] {
@@ -50,6 +49,29 @@ function summarize(verb: string, summary: TransferSummary, unmapped: number, des
 export function registerTransferCommands(services: CommandServices): vscode.Disposable[] {
 	const { context, connections, outputChannel, treeProvider, treeView } = services;
 
+	/** Explorer upload of items no server maps: the user picks the server, then a folder on it. */
+	const uploadUnmapped = async (targets: readonly vscode.Uri[]): Promise<void> => {
+		const localPaths = withoutNestedLocalPaths(targets.filter(uri => uri.scheme === 'file').map(uri => uri.fsPath));
+		if (localPaths.length === 0) {
+			return;
+		}
+		const label = localPaths.length === 1 ? `"${path.basename(localPaths[0])}"` : `${localPaths.length} items`;
+		const server = await pickServer(`Upload ${label} to which server?`);
+		if (!server) {
+			return;
+		}
+		const client = await connections.getClient(server);
+		const targetDir = await pickRemoteFolder(client, server.remoteRoot, `Upload ${label} to ${server.name}`);
+		if (!targetDir) {
+			return;
+		}
+		try {
+			await uploadIntoFolder(server, connections, outputChannel, localPaths, targetDir);
+		} finally {
+			treeProvider.refreshDirectory(server, targetDir);
+		}
+	};
+
 	return [
 		vscode.commands.registerCommand(
 			'remoteHostExplorer.uploadFile',
@@ -60,7 +82,8 @@ export function registerTransferCommands(services: CommandServices): vscode.Disp
 				}
 				const resolutions = targets.flatMap(uri => resolveServersForLocalPath(uri.fsPath));
 				if (resolutions.length === 0) {
-					vscode.window.showWarningMessage(NO_MAPPING_MESSAGE);
+					// Nothing is mapped, so there is no remote path to derive: ask for the server and folder.
+					await uploadUnmapped(targets);
 					return;
 				}
 				const server = await pickServerForLocalFiles(
@@ -89,6 +112,28 @@ export function registerTransferCommands(services: CommandServices): vscode.Disp
 				void notifyTransfer(summarize('Uploaded', summary, unmapped, ` to ${server.name}`));
 				for (const { resolution } of mapped) {
 					treeProvider.refreshDirectory(server, dirnameRemote(resolution.remotePath));
+				}
+			})
+		),
+
+		// Remote Hosts tree: upload local files or folders the user picks into this folder, mapped or not.
+		vscode.commands.registerCommand(
+			'remoteHostExplorer.uploadHere',
+			guarded('Upload failed', async (clicked?: TreeNode) => {
+				const target = clicked ?? treeView.selection[0];
+				if (!target) {
+					return;
+				}
+				const server = target.server;
+				const targetDir = dropDirectoryOf(target);
+				const localPaths = await pickUploadItems(context, server, targetDir);
+				if (!localPaths) {
+					return;
+				}
+				try {
+					await uploadIntoFolder(server, connections, outputChannel, localPaths, targetDir);
+				} finally {
+					treeProvider.refreshDirectory(server, targetDir);
 				}
 			})
 		),
@@ -291,6 +336,63 @@ async function gitChangedFiles(repositoryRoot?: vscode.Uri): Promise<vscode.Uri[
 		[...uris.values()].map(async uri => ((await fs.promises.stat(uri.fsPath).catch(() => undefined))?.isFile() ? uri : undefined))
 	);
 	return existing.filter((uri): uri is vscode.Uri => uri !== undefined);
+}
+
+/** Drops paths inside another selected folder: uploading the folder already sends them. */
+function withoutNestedLocalPaths(localPaths: readonly string[]): string[] {
+	return localPaths.filter(
+		candidate => !localPaths.some(other => other !== candidate && isSameOrInside(other, candidate))
+	);
+}
+
+const LAST_UPLOAD_FOLDER_KEY = 'remoteHostExplorer.lastUploadFolder';
+
+/**
+ * Asks which local files or folders to upload into `targetDir`, starting from the folder mapped to it, or
+ * else the last folder used. Windows and Linux dialogs pick files or folders, not both, so they ask first.
+ */
+async function pickUploadItems(
+	context: vscode.ExtensionContext,
+	server: ServerProfile,
+	targetDir: string
+): Promise<string[] | undefined> {
+	let canSelectFolders = true;
+	let canSelectFiles = true;
+	if (process.platform !== 'darwin') {
+		const kind = await vscode.window.showQuickPick(
+			[
+				{ label: '$(file) Files...', folders: false },
+				{ label: '$(folder) Folders...', folders: true },
+			],
+			{ placeHolder: `Upload to ${targetDir}` }
+		);
+		if (!kind) {
+			return undefined;
+		}
+		canSelectFolders = kind.folders;
+		canSelectFiles = !kind.folders;
+	}
+
+	const mapped = localPathForRemote(server, targetDir);
+	const last = context.workspaceState.get<string>(LAST_UPLOAD_FOLDER_KEY);
+	const workspaceFolder = vscode.workspace.workspaceFolders?.find(folder => folder.uri.scheme === 'file')?.uri;
+	const picked = await vscode.window.showOpenDialog({
+		canSelectFiles,
+		canSelectFolders,
+		canSelectMany: true,
+		defaultUri: mapped ? vscode.Uri.file(mapped) : last ? vscode.Uri.file(last) : workspaceFolder,
+		openLabel: 'Upload',
+		title: `Upload to ${server.name}: ${targetDir}`,
+	});
+	const local = (picked ?? []).filter(uri => uri.scheme === 'file');
+	if (local.length < (picked ?? []).length) {
+		vscode.window.showWarningMessage('Choose files and folders on this computer.');
+	}
+	if (local.length === 0) {
+		return undefined;
+	}
+	await context.workspaceState.update(LAST_UPLOAD_FOLDER_KEY, path.dirname(local[0].fsPath));
+	return withoutNestedLocalPaths(local.map(uri => uri.fsPath));
 }
 
 const LAST_DOWNLOAD_FOLDER_KEY = 'remoteHostExplorer.lastDownloadFolder';

@@ -3,6 +3,28 @@
 All notable changes to Remote Host Explorer are documented here.
 This project follows [Semantic Versioning](https://semver.org/).
 
+## [0.1.9] - 2026-10-13
+
+- **FTPS on shared hosting**: a server whose certificate is issued for your provider's host name
+  rather than your domain (the "Hostname/IP does not match certificate's altnames" error) now asks
+  whether to trust it, and connects once you accept. You're asked again if the certificate's names
+  change.
+- **Forget Host Key** and **Forget Accepted Certificate** in a server's right-click menu clear what
+  you trusted for it, so the next connection asks again.
+- A host key or certificate you trust while testing a server in the form is now only remembered if
+  you save the server.
+- Removing a server keeps its trusted host key or certificate while another server uses the same host
+  and port.
+- With no servers yet, the Remote Hosts view's message and **Add Server...** button stay centred at
+  any width.
+- **Upload without a folder mapping**: **Upload to Remote Host** in the Explorer now works for any file
+  or folder. Outside a mapped folder, you pick the server and browse to the folder to upload into.
+- **Upload Here...** on a folder or server in the Remote Hosts view picks files or folders on your
+  computer and uploads them into it.
+- **Copy, Cut, and Paste are removed** from the Remote Hosts view, along with its keyboard shortcuts
+  (`Cmd`/`Ctrl`+`C`, `X`, `V`, and Delete). They could take over copy, paste, and delete in VS Code's
+  own Explorer. Move remote items by dragging them onto a folder; delete from the right-click menu.
+
 ## [0.1.8] - 2026-09-25
 
 - **Production servers**: tick **Production server** on a live site. It's shown in red, and uploads,

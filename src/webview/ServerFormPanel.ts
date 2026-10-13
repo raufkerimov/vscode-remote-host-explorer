@@ -63,6 +63,8 @@ interface PanelContext {
 	context: vscode.ExtensionContext;
 	secrets: SecretsManager;
 	hostKeys: HostKeyStore;
+	/** What Test and Browse trust: in memory only, until saving keeps the saved endpoint's part. */
+	draftHostKeys: HostKeyStore;
 	/** The profile being edited; saving overwrites it. */
 	existing?: ServerProfile;
 	/** The profile the form was filled from: `existing` when editing, the original when duplicating. */
@@ -120,7 +122,14 @@ export class ServerFormPanel {
 			disposables
 		);
 
-		const panelContext: PanelContext = { context, secrets, hostKeys, existing, source: existing ?? duplicateOf };
+		const panelContext: PanelContext = {
+			context,
+			secrets,
+			hostKeys,
+			draftHostKeys: hostKeys.draft(),
+			existing,
+			source: existing ?? duplicateOf,
+		};
 		panel.webview.html = await renderForm(panel.webview, mediaRoot, existing, duplicateOf);
 
 		panel.webview.onDidReceiveMessage(
@@ -256,7 +265,7 @@ function mappingsFromForm(form: SubmittedForm): FolderMapping[] {
 
 async function handleSubmit(
 	panel: vscode.WebviewPanel,
-	{ secrets, existing, source }: PanelContext,
+	{ secrets, hostKeys, draftHostKeys, existing, source }: PanelContext,
 	onSaved: (profile: ServerProfile) => void,
 	form: SubmittedForm
 ): Promise<void> {
@@ -314,6 +323,8 @@ async function handleSubmit(
 
 	// A project scope only exists while a folder is open; fall back rather than failing the save.
 	const scope: ProfileScope = form.scope === 'project' && hasProjectScope() ? 'project' : 'global';
+	// Before saving, so connecting right after doesn't ask again about what Test Connection accepted.
+	await hostKeys.keepFrom(draftHostKeys, profile.protocol, profile.host, profile.port ?? defaultPortFor(profile.protocol));
 	await upsertServerProfile(profile, scope);
 	onSaved(profile);
 	panel.dispose();
@@ -426,7 +437,7 @@ function targetsSameEndpoint(existing: ServerProfile | undefined, form: Submitte
 }
 
 async function createClientFromForm(
-	{ secrets, hostKeys, source }: PanelContext,
+	{ secrets, draftHostKeys: hostKeys, source }: PanelContext,
 	form: SubmittedForm
 ): Promise<RemoteClient> {
 	const mayReuseSecrets = targetsSameEndpoint(source, form);
@@ -453,6 +464,8 @@ async function createClientFromForm(
 			: undefined;
 		options.agent = usesAgent ? requireSshAgentSocket() : undefined;
 		options.hostKeyPolicy = hostKeys.policyFor(form.name.trim() || host, host, port);
+	} else if (form.protocol === 'ftps') {
+		options.certificatePolicy = hostKeys.certificatePolicyFor(form.name.trim() || host, host, port);
 	}
 
 	return buildRemoteClient(form.protocol, options);

@@ -67,7 +67,18 @@ export async function createRemoteClient(
 
 	if (server.protocol !== 'sftp') {
 		// FTP has no key authentication and no SSH host keys.
-		return buildRemoteClient(server.protocol, { host: server.host, port, username: server.username, password }, onClose);
+		return buildRemoteClient(
+			server.protocol,
+			{
+				host: server.host,
+				port,
+				username: server.username,
+				password,
+				certificatePolicy:
+					server.protocol === 'ftps' ? hostKeys.certificatePolicyFor(server.name, server.host, port) : undefined,
+			},
+			onClose
+		);
 	}
 
 	// Both credentials are offered when both are present: ssh2 tries the key first and falls back to the

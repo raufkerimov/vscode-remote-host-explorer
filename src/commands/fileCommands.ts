@@ -1,18 +1,14 @@
 import * as vscode from 'vscode';
 import type { ServerProfile } from '../config/serverConfig';
 import { FileNode, ServerNode, withoutNestedSelections, type TreeNode } from '../tree/RemoteTreeProvider';
-import { moveRemoteItems, promptForConflict } from '../remote/moveItems';
-import type { RemoteClient } from '../remote/RemoteClient';
-import { CancelledError, copyRemoteTree, withTransferProgress, type TransferRun } from '../remote/transfer';
-import { notifyTransfer } from '../remote/transferLog';
 import { confirmProductionChange } from '../config/productionGuard';
 import { formatOctal, formatPermissions, parseModeInput } from '../util/permissions';
-import { basenameRemote, dirnameRemote, isSameOrInside, joinRemote, normalizeRemote } from '../util/remotePath';
+import { basenameRemote, dirnameRemote, joinRemote, normalizeRemote } from '../util/remotePath';
 import { guarded, resolveSelection, type CommandServices } from './shared';
 
 type TargetNode = ServerNode | FileNode;
 
-/** Directory a new/pasted item should land in: the server root, the folder itself, or a file's folder. */
+/** Directory a new item should land in: the server root, the folder itself, or a file's folder. */
 function targetDirectoryOf(target: TargetNode): string {
 	if (target.kind === 'server') {
 		return normalizeRemote(target.server.remoteRoot);
@@ -67,7 +63,7 @@ function groupByServer(nodes: readonly FileNode[]): Map<string, { server: Server
 }
 
 export function registerFileCommands(services: CommandServices): vscode.Disposable[] {
-	const { connections, treeProvider, treeView, fileCache, clipboard } = services;
+	const { connections, treeProvider, treeView, fileCache } = services;
 
 	/** The file/directory rows a command applies to, honouring multi-selection and keyboard invocation. */
 	const selectedFiles = (clicked?: TreeNode, selected?: readonly TreeNode[]): FileNode[] =>
@@ -151,92 +147,6 @@ export function registerFileCommands(services: CommandServices): vscode.Disposab
 				vscode.window.showInformationMessage(
 					nodes.length === 1 ? `Copied path: ${nodes[0].entry.path}` : `Copied ${nodes.length} paths`
 				);
-			})
-		),
-
-		vscode.commands.registerCommand(
-			'remoteHostExplorer.copyFile',
-			guarded('Failed to copy', (clicked?: TreeNode, selected?: TreeNode[]) => {
-				const nodes = selectedFiles(clicked, selected);
-				if (nodes.length === 0) {
-					return;
-				}
-				clipboard.current = { nodes, mode: 'copy' };
-				vscode.window.setStatusBarMessage(`Copied ${nodes.length === 1 ? `"${nodes[0].entry.name}"` : `${nodes.length} items`}`, 3000);
-			})
-		),
-
-		vscode.commands.registerCommand(
-			'remoteHostExplorer.cutFile',
-			guarded('Failed to cut', (clicked?: TreeNode, selected?: TreeNode[]) => {
-				const nodes = selectedFiles(clicked, selected);
-				if (nodes.length === 0) {
-					return;
-				}
-				clipboard.current = { nodes, mode: 'cut' };
-				vscode.window.setStatusBarMessage(
-					`Cut ${nodes.length === 1 ? `"${nodes[0].entry.name}"` : `${nodes.length} items`} — paste into a folder to move`,
-					3000
-				);
-			})
-		),
-
-		vscode.commands.registerCommand(
-			'remoteHostExplorer.pasteFile',
-			guarded('Failed to paste', async (clicked?: TargetNode) => {
-				const clip = clipboard.current;
-				if (!clip || clip.nodes.length === 0) {
-					vscode.window.showInformationMessage('Nothing to paste. Copy or cut remote items first.');
-					return;
-				}
-				const target = clicked ?? treeView.selection[0];
-				if (!target) {
-					vscode.window.showInformationMessage('Select a folder to paste into.');
-					return;
-				}
-
-				const server = target.server;
-				const targetDir = targetDirectoryOf(target);
-				const sources = withoutNestedSelections(clip.nodes.filter(node => node.server.id === server.id));
-				if (sources.length < clip.nodes.length) {
-					vscode.window.showWarningMessage('Items from a different server were skipped: copying between servers is not supported.');
-				}
-				if (sources.length === 0) {
-					return;
-				}
-				const verb = clip.mode === 'cut' ? 'Move' : 'Copy';
-				if (!(await confirmProductionChange(server, `${verb} ${sources.length} item(s) into ${targetDir}.`))) {
-					return;
-				}
-				const client = await connections.getClient(server);
-
-				if (clip.mode === 'cut') {
-					const result = await moveRemoteItems(
-						client,
-						sources.map(node => ({ path: node.entry.path, name: node.entry.name, isDirectory: node.entry.isDirectory })),
-						targetDir,
-						(fromPath, toPath) => fileCache.retrack(server.id, fromPath, toPath)
-					);
-					// A cut is consumed by the paste; pasting again must not try to move the originals twice.
-					clipboard.current = undefined;
-					refreshAll(server, result.affectedDirectories);
-					if (result.moved > 0) {
-						vscode.window.showInformationMessage(`Moved ${result.moved} item(s) to ${targetDir}.`);
-					}
-					return;
-				}
-
-				const summary = await withTransferProgress(`Copying ${sources.length} item(s)`, async run => {
-					for (const source of sources) {
-						await pasteCopy(client, source, targetDir, run);
-					}
-				});
-				if (!summary) {
-					vscode.window.showInformationMessage('Copy cancelled.');
-					return;
-				}
-				void notifyTransfer(`Pasted ${summary.transferred} file(s) into ${targetDir}.`);
-				treeProvider.refreshDirectory(server, targetDir);
 			})
 		),
 
@@ -409,42 +319,4 @@ export function registerFileCommands(services: CommandServices): vscode.Disposab
 			})
 		),
 	];
-}
-
-/** Copies one clipboard item into `targetDir`, resolving name clashes with the user. */
-async function pasteCopy(
-	client: RemoteClient,
-	source: FileNode,
-	targetDir: string,
-	run: TransferRun
-): Promise<void> {
-	const sourcePath = normalizeRemote(source.entry.path);
-
-	// Copying a folder into itself would keep listing the copy it is writing and never finish.
-	if (source.entry.isDirectory && isSameOrInside(sourcePath, targetDir)) {
-		vscode.window.showWarningMessage(`Cannot copy "${source.entry.name}" into itself.`);
-		run.summary.skipped += 1;
-		return;
-	}
-
-	let destinationPath = joinRemote(targetDir, basenameRemote(sourcePath));
-	if (destinationPath === sourcePath) {
-		// Pasting into the item's own folder makes a sibling copy rather than failing.
-		destinationPath = joinRemote(targetDir, withNameSuffix(basenameRemote(sourcePath), ' copy'));
-	}
-
-	if (await client.exists(destinationPath)) {
-		const decision = await promptForConflict(basenameRemote(destinationPath), targetDir);
-		if (decision === 'cancel') {
-			// Stops the remaining items; withTransferProgress reports this as a cancellation, not a failure.
-			throw new CancelledError();
-		}
-		if (decision === 'skip') {
-			run.summary.skipped += 1;
-			return;
-		}
-		await client.delete(destinationPath, source.entry.isDirectory);
-	}
-
-	await copyRemoteTree(source.server, client, sourcePath, destinationPath, source.entry.isDirectory, run);
 }

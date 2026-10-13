@@ -33,9 +33,9 @@ export async function promptForConflict(
 }
 
 /**
- * Moves remote items into `targetDir` on one server. Shared by drag-and-drop and cut/paste so both apply
- * the same guards: no-op moves are skipped, a directory can't be moved into itself, and existing
- * destinations are only replaced after confirmation.
+ * Moves remote items into `targetDir` on one server, for drag-and-drop inside the tree. No-op moves
+ * are skipped, a directory can't be moved into itself, and existing destinations are only replaced
+ * after confirmation.
  */
 export async function moveRemoteItems(
 	client: RemoteClient,

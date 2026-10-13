@@ -1,0 +1,46 @@
+/* Mirrors VS Code's own welcome views, but centred at every width: the built-in renderer keeps the text
+   left-aligned and moves the button between centred and left-aligned as the view is resized. */
+body {
+	margin: 0;
+	padding: 0 20px;
+	color: var(--vscode-foreground);
+	font-family: var(--vscode-font-family);
+	font-size: var(--vscode-font-size);
+}
+
+main {
+	display: flex;
+	flex-direction: column;
+	align-items: center;
+	text-align: center;
+}
+
+p {
+	margin: 1em 0 0;
+	line-height: 1.4em;
+}
+
+.button {
+	box-sizing: border-box;
+	display: block;
+	width: 100%;
+	max-width: 300px;
+	margin-top: 1em;
+	padding: 4px;
+	border: 1px solid var(--vscode-button-border, transparent);
+	border-radius: 2px;
+	background: var(--vscode-button-background);
+	color: var(--vscode-button-foreground);
+	line-height: 18px;
+	text-align: center;
+	text-decoration: none;
+}
+
+.button:hover {
+	background: var(--vscode-button-hoverBackground);
+}
+
+.button:focus {
+	outline: 1px solid var(--vscode-focusBorder);
+	outline-offset: 2px;
+}

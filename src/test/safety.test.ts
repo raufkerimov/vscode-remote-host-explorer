@@ -264,6 +264,9 @@ suite('new tree menus', () => {
 		assert.ok(!regexIn(whenOf('syncRemoteFolder')).test('remoteHostExplorer.file.sftp.mapped'));
 		assert.ok(regexIn(whenOf('syncServer')).test('remoteHostExplorer.server.disconnected.ftp'));
 		assert.ok(regexIn(whenOf('changePermissions')).test('remoteHostExplorer.file.ftps.unmapped'));
+		assert.ok(regexIn(whenOf('uploadHere')).test('remoteHostExplorer.directory.ftp.unmapped'));
+		assert.ok(regexIn(whenOf('uploadHere')).test('remoteHostExplorer.server.disconnected.sftp'));
+		assert.ok(!regexIn(whenOf('uploadHere')).test('remoteHostExplorer.file.sftp.mapped'));
 	});
 
 	test('every contributed command is registered on activation', async () => {
